@@ -1,5 +1,6 @@
 #include "http_response.h"
 #include <assert.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -75,9 +76,46 @@ static void check(const char *method, const char *target, int expected,
     }
 }
 
+static void api_error(const http_buffer *buffer, const http_request *request, int expected)
+{
+    int pair[2]; assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    nonblocking(pair[0]);
+    assert(http_send_response(pair[0], buffer, request) == 0);
+    char output[512] = {0};
+    assert(read(pair[1], output, sizeof(output)-1) > 0);
+    int status;
+    assert(sscanf(output, "HTTP/1.1 %d", &status) == 1 && status == expected);
+    close(pair[0]); close(pair[1]);
+}
+
+static void test_api_bounds(void)
+{
+    unsigned char data[] = "GET/";
+    http_buffer buffer = {.data=data, .length=4};
+    http_request valid = {.method={0,3}, .target={3,1}};
+    http_request r = valid;
+    r.target.offset = SIZE_MAX; api_error(&buffer, &r, 500);
+    r = valid; r.target.length = SIZE_MAX; api_error(&buffer, &r, 500);
+    r = valid; r.method.offset = 3; api_error(&buffer, &r, 500);
+    r = valid; r.host.offset = 5; api_error(&buffer, &r, 500);
+    r = valid; r.target.length = 0; api_error(&buffer, &r, 500);
+    api_error(NULL, &valid, 500); api_error(&buffer, NULL, 500);
+    http_buffer empty = {0}; api_error(&empty, &valid, 500);
+    r = (http_request){.error=HTTP_BAD_REQUEST};
+    api_error(NULL, &r, 400); /* Errors never dereference request fields. */
+    unsigned char *large = malloc(HTTP_LINE_LIMIT+4);
+    assert(large); memset(large, 'a', HTTP_LINE_LIMIT+4); memcpy(large, "GET/", 4);
+    buffer = (http_buffer){.data=large, .length=HTTP_LINE_LIMIT+4};
+    r = valid; r.target.length = HTTP_LINE_LIMIT;
+    api_error(&buffer, &r, 414);
+    r.target.length++; api_error(&buffer, &r, 414);
+    free(large);
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
+    test_api_bounds();
     int original = open(".", O_RDONLY);
     char temp[] = "/tmp/http-response-XXXXXX";
     assert(mkdtemp(temp) && chdir(temp) == 0 && mkdir("www", 0700) == 0);

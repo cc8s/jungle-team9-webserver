@@ -36,6 +36,16 @@ static int header_is(const unsigned char *data, size_t start, size_t length,
     return length == strlen(name) && !strncasecmp((const char *)data + start, name, length);
 }
 
+static http_request_error header_size_error(size_t line_end, size_t header_end,
+                                            size_t length)
+{
+    if ((line_end == length && length >= HTTP_LINE_LIMIT) ||
+        (line_end != length && line_end + 2 > HTTP_LINE_LIMIT)) return HTTP_LINE_TOO_LONG;
+    if (header_end > HTTP_HEADER_LIMIT || (!header_end && length >= HTTP_HEADER_LIMIT))
+        return HTTP_HEADERS_TOO_LARGE;
+    return HTTP_NO_ERROR;
+}
+
 http_parse_result http_parse_request(const unsigned char *data, size_t length,
                                      http_request *r)
 {
@@ -55,12 +65,11 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
             }
         }
         size_t line_end = find_crlf(data, 0, length);
-        if ((line_end == length && length >= HTTP_LINE_LIMIT) ||
-            (line_end != length && line_end + 2 > HTTP_LINE_LIMIT))
-            return fail(r, HTTP_LINE_TOO_LONG);
-        if (header_end > HTTP_HEADER_LIMIT || (!header_end && length >= HTTP_HEADER_LIMIT))
-            return fail(r, HTTP_HEADERS_TOO_LARGE);
-        if (!header_end) return HTTP_NEED_MORE;
+        /* Syntax errors in received bytes take priority over size errors. */
+        if (line_end == length) {
+            http_request_error error = header_size_error(line_end, 0, length);
+            return error ? fail(r, error) : HTTP_NEED_MORE;
+        }
 
         size_t first = 0;
         while (first < line_end && data[first] != ' ') first++;
@@ -82,8 +91,10 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
         r->version = (http_field){second + 1, 8};
 
         int has_length = 0, has_transfer = 0, has_host = 0;
-        for (size_t start = line_end + 2; start < header_end - 2;) {
-            size_t end = find_crlf(data, start, header_end), colon = start;
+        size_t scan_end = header_end ? header_end - 2 : length;
+        for (size_t start = line_end + 2; start < scan_end;) {
+            size_t end = find_crlf(data, start, length), colon = start;
+            if (end == length) break; /* An incomplete field needs more data. */
             while (colon < end && data[colon] != ':') {
                 if (!is_token(data[colon])) return fail(r, HTTP_BAD_REQUEST);
                 colon++;
@@ -115,7 +126,13 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
             }
             start = end + 2;
         }
+        if (!header_end) {
+            http_request_error error = header_size_error(line_end, 0, length);
+            return error ? fail(r, error) : HTTP_NEED_MORE;
+        }
         if (!has_host || (has_length && has_transfer)) return fail(r, HTTP_BAD_REQUEST);
+        http_request_error size_error = header_size_error(line_end, header_end, length);
+        if (size_error) return fail(r, size_error);
         if (has_transfer) return fail(r, HTTP_UNSUPPORTED_TRANSFER);
         if (r->content_length > HTTP_BODY_LIMIT) return fail(r, HTTP_BODY_TOO_LARGE);
         r->header_length = header_end;
@@ -182,12 +199,13 @@ http_parse_result http_receive_request(int fd, http_buffer *buffer, http_request
         http_request_error error = wait_for_data(fd, deadline, timeout);
         if (error) return fail(r, error);
         /* Caller supplies an O_NONBLOCK connection. */
-        ssize_t n = recv(fd, buffer->data + buffer->length,
-                         buffer->capacity - buffer->length, 0);
+        /* Bound header accumulation even if the peer sends an oversized chunk.
+           The next parser call checks received syntax before reporting size. */
+        size_t available = buffer->capacity - buffer->length;
+        if (!r->headers_complete && available > HTTP_HEADER_LIMIT - buffer->length)
+            available = HTTP_HEADER_LIMIT - buffer->length;
+        ssize_t n = recv(fd, buffer->data + buffer->length, available, 0);
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
-        int64_t now = http_now_ms();
-        if (now < 0) return fail(r, HTTP_READ_ERROR);
-        if (now >= deadline) return fail(r, timeout);
         if (n < 0 && errno == EINTR) continue;
         if (n < 0) return fail(r, HTTP_READ_ERROR);
         if (!n) return fail(r, HTTP_INCOMPLETE_REQUEST);

@@ -116,6 +116,69 @@ static void test_body_policy(void)
     free(buffer.data); close(pair[0]); close(pair[1]);
 }
 
+typedef struct { int fd; const char *data; size_t length; } header_sender;
+static void *send_headers_for_test(void *argument)
+{
+    header_sender *sender = argument;
+    size_t sent = 0;
+    while (sent < sender->length) {
+        ssize_t n = write(sender->fd, sender->data+sent, sender->length-sent);
+        assert(n > 0);
+        sent += (size_t)n;
+    }
+    return NULL;
+}
+
+static void test_size_priority(void)
+{
+    char *wire = malloc(HTTP_HEADER_LIMIT + 128);
+    assert(wire);
+    for (size_t size = HTTP_LINE_LIMIT-1; size <= HTTP_LINE_LIMIT+1; size++) {
+        memcpy(wire, "GET /", 5);
+        size_t padding = size - 5 - strlen(" HTTP/1.1\r\n");
+        memset(wire+5, 'a', padding);
+        strcpy(wire+5+padding, " HTTP/1.1\r\nHost: x\r\n\r\n");
+        http_request r = {0};
+        http_parse_result result = http_parse_request((unsigned char *)wire, strlen(wire), &r);
+        if (size <= HTTP_LINE_LIMIT) assert(result == HTTP_COMPLETE);
+        else {
+            assert(result == HTTP_PARSE_ERROR && r.error == HTTP_LINE_TOO_LONG);
+            wire[1] = '('; /* Invalid method wins even over an oversized line. */
+            error(wire, HTTP_BAD_REQUEST);
+        }
+    }
+    const char *prefix = "GET / HTTP/1.1\r\nHost: x\r\nX: ";
+    for (size_t size = HTTP_HEADER_LIMIT-1; size <= HTTP_HEADER_LIMIT+1; size++) {
+        strcpy(wire, prefix);
+        memset(wire+strlen(prefix), 'a', size-strlen(prefix)-4);
+        strcpy(wire+size-4, "\r\n\r\n");
+        http_request r = {0};
+        http_parse_result result = http_parse_request((unsigned char *)wire, size, &r);
+        if (size <= HTTP_HEADER_LIMIT) assert(result == HTTP_COMPLETE);
+        else {
+            assert(result == HTTP_PARSE_ERROR && r.error == HTTP_HEADERS_TOO_LARGE);
+            wire[strlen(prefix)-3] = ' '; /* Invalid header name, not just invalid control bytes. */
+            error(wire, HTTP_BAD_REQUEST);
+            wire[size-2] = 0; /* No final blank line: completed bad field still wins. */
+            error(wire, HTTP_BAD_REQUEST);
+        }
+    }
+    /* Oversized accumulated headers stop at the receive-side hard ceiling. */
+    strcpy(wire, prefix);
+    memset(wire+strlen(prefix), 'a', HTTP_HEADER_LIMIT+64-strlen(prefix));
+    int pair[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    nonblocking(pair[1]);
+    header_sender sender = {pair[0], wire, HTTP_HEADER_LIMIT+64};
+    pthread_t worker;
+    assert(pthread_create(&worker, NULL, send_headers_for_test, &sender) == 0);
+    http_buffer buffer = {0}; http_request r = {0};
+    assert(http_receive_request(pair[1], &buffer, &r, http_now_ms()+5000) == HTTP_PARSE_ERROR);
+    assert(r.error == HTTP_HEADERS_TOO_LARGE && buffer.length == HTTP_HEADER_LIMIT);
+    assert(pthread_join(worker, NULL) == 0);
+    free(buffer.data); free(wire); close(pair[0]); close(pair[1]);
+}
+
 int main(void)
 {
     const unsigned char data[] = "POST /file?q=1 HTTP/1.1\r\nhOsT: localhost\r\nContent-Length: 4\r\n\r\n\0\r\nxNEXT";
@@ -172,6 +235,7 @@ int main(void)
     assert(r.error == HTTP_INCOMPLETE_REQUEST);
     free(buffer.data);
     close(sockets[0]); close(sockets[1]);
+    test_size_priority();
     test_header_timeout();
     test_body_policy();
     puts("HTTP body policy: GET skips body; POST fixed 10s deadline passed");

@@ -93,8 +93,10 @@ static int hex(unsigned char c)
     return -1;
 }
 
-static int decode_path(const unsigned char *target, size_t length, char *path)
+static int decode_path(const unsigned char *target, size_t length, char *path,
+                       size_t path_size)
 {
+    if (!path_size) return 414;
     size_t end = 0, out = 0;
     while (end < length && target[end] != '?') end++;
     for (size_t i = 0; i < end; i++) {
@@ -105,6 +107,7 @@ static int decode_path(const unsigned char *target, size_t length, char *path)
             i += 2;
         }
         if (!c || c < 32 || c == 127 || c == '\\') return 400;
+        if (out >= path_size - 1) return 414;
         path[out++] = (char)c;
     }
     path[out] = 0;
@@ -116,7 +119,10 @@ static int decode_path(const unsigned char *target, size_t length, char *path)
         if (endpart - p == 2 && p[0] == '.' && p[1] == '.') return 403;
         p = endpart;
     }
-    if (!strcmp(path, "/")) strcpy(path, "/index.html");
+    if (!strcmp(path, "/")) {
+        if (path_size < sizeof("/index.html")) return 414;
+        memcpy(path, "/index.html", sizeof("/index.html"));
+    }
     return 0;
 }
 
@@ -170,17 +176,34 @@ static int open_static(char *path, int *status)
     return -1;
 }
 
+static int field_in_buffer(http_field field, size_t length)
+{
+    return field.offset <= length && field.length <= length - field.offset;
+}
+
 int http_send_response(int fd, const http_buffer *buffer, const http_request *request)
 {
     int64_t now = http_now_ms();
     if (now < 0) return -1;
     int64_t deadline = now + 5000;
+    if (!request) return send_error(fd, 500, &deadline);
     int status = request_status(request->error);
     if (status != 200) return send_error(fd, status, &deadline);
+    /* Error responses above do not require a receive buffer. */
+    if (!buffer || !buffer->data ||
+        !field_in_buffer(request->method, buffer->length) ||
+        !field_in_buffer(request->target, buffer->length) ||
+        !field_in_buffer(request->version, buffer->length) ||
+        !field_in_buffer(request->host, buffer->length) ||
+        !field_in_buffer(request->connection, buffer->length) ||
+        !request->method.length || !request->target.length)
+        return send_error(fd, 500, &deadline);
+    if (request->target.length >= HTTP_LINE_LIMIT)
+        return send_error(fd, 414, &deadline);
     if (request->method.length != 3 || memcmp(buffer->data + request->method.offset, "GET", 3))
         return send_error(fd, 405, &deadline);
     char path[HTTP_LINE_LIMIT + 1];
-    status = decode_path(buffer->data + request->target.offset, request->target.length, path);
+    status = decode_path(buffer->data + request->target.offset, request->target.length, path, sizeof(path));
     if (status) return send_error(fd, status, &deadline);
     const char *mime = get_mime_type(path);
     int file = open_static(path, &status);

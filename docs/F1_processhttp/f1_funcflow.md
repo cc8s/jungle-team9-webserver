@@ -121,3 +121,18 @@ wait_for_data는 헤더와 본문이 공유하는 대기 함수다. 호출자가
 ## 논블로킹 I/O 계약
 
 main이 accept 성공 후 conn_fd만 O_NONBLOCK으로 설정한다. A는 poll(POLLIN) → recv(..., 0), B는 poll(POLLOUT) → send(..., 0)를 반복한다. EAGAIN이면 남은 기한으로 다시 대기하고, 양수 반환만큼 처리 위치를 이동한다. B의 파일 읽기 버퍼는 16 KiB이며 별도의 1 KiB 송신 제한은 없다.
+
+## 수신 결과와 응답 경계 보완
+
+```text
+wait_for_data(남은 절대 기한)
+→ recv → 재시도 오류 / 실제 오류 / EOF 판정 → buffer.length 누적
+→ 파서: 헤더 문법 우선 검사 → header_size_error → 본문 완료 판정
+
+http_send_response
+→ A 오류이면 버퍼 없이 오류 응답
+→ 정상 요청 필드 범위 검사(500) → URI 길이 검사(414)
+→ decode_path(..., sizeof(path)) → 기존 파일 응답 흐름
+```
+
+헤더 recv에 전달하는 길이는 남은 수신 버퍼 공간과 헤더 누적 상한 중 작은 값이다. 필드 범위 검사는 length <= buffer.length - offset 형태로 덧셈 오버플로우를 피한다.
