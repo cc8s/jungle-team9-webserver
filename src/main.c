@@ -64,10 +64,19 @@ int main(int argc, char **argv){
             continue;
         }
 
+        // accept 성공 직후부터 헤더 전체 수신 기한을 계산한다.
+        int64_t accepted_at = http_now_ms();
+        if (accepted_at < 0) {
+            perror("clock_gettime");
+            close(conn_fd);
+            continue;
+        }
+        int64_t header_deadline = accepted_at + HTTP_HEADER_TIMEOUT_MS;
+
         // A: 요청 수신·파싱. B에서 사용할 때까지 buffer를 유지한다.
         http_buffer buffer = {0};
         http_request request = {0};
-        if (http_receive_request(conn_fd, &buffer, &request) == HTTP_COMPLETE) {
+        if (http_receive_request(conn_fd, &buffer, &request, header_deadline) == HTTP_COMPLETE) {
             printf("request: %.*s %.*s (%zu bytes)\n",
                    (int)request.method.length, buffer.data + request.method.offset,
                    (int)request.target.length, buffer.data + request.target.offset,

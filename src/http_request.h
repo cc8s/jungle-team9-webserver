@@ -1,7 +1,9 @@
 #ifndef HTTP_REQUEST_H
 #define HTTP_REQUEST_H
 #include <stddef.h>
+#include <stdint.h>
 
+#define HTTP_HEADER_TIMEOUT_MS 5000
 #define HTTP_LINE_LIMIT 8192
 #define HTTP_HEADER_LIMIT 32768
 #define HTTP_BODY_LIMIT 1048576
@@ -13,7 +15,8 @@ typedef enum {
     HTTP_NO_ERROR, HTTP_BAD_REQUEST, HTTP_LINE_TOO_LONG,
     HTTP_HEADERS_TOO_LARGE, HTTP_BODY_TOO_LARGE,
     HTTP_UNSUPPORTED_TRANSFER, HTTP_UNSUPPORTED_VERSION,
-    HTTP_READ_ERROR, HTTP_INCOMPLETE_REQUEST, HTTP_NO_MEMORY
+    HTTP_READ_ERROR, HTTP_INCOMPLETE_REQUEST, HTTP_NO_MEMORY,
+    HTTP_HEADER_TIMEOUT
 } http_request_error;
 
 typedef struct {
@@ -31,7 +34,9 @@ typedef struct {
 /* Initialize request to zero. Keep the same accumulated buffer between calls. */
 http_parse_result http_parse_request(const unsigned char *data, size_t length,
                                      http_request *request);
-/* Blocking I/O; caller owns fd and frees buffer.data after response handling. */
+/* Monotonic milliseconds, or -1 on clock failure. */
+int64_t http_now_ms(void);
+/* Header deadline is absolute; caller owns fd and frees buffer after B. */
 http_parse_result http_receive_request(int fd, http_buffer *buffer,
-                                       http_request *request);
+                                       http_request *request, int64_t header_deadline_ms);
 #endif

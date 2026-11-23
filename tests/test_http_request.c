@@ -1,5 +1,7 @@
 #include "http_request.h"
 #include <assert.h>
+#include <pthread.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +13,56 @@ static void error(const char *text, http_request_error expected)
     http_request r = {0};
     assert(http_parse_request((const unsigned char *)text, strlen(text), &r) == HTTP_PARSE_ERROR);
     assert(r.error == expected);
+}
+
+static void *trickle(void *argument)
+{
+    int fd = *(int *)argument;
+    struct timespec delay = {0, 20000000};
+    for (int i = 0; i < 20; i++) {
+        nanosleep(&delay, NULL);
+        assert(write(fd, "G", 1) == 1);
+    }
+    return NULL;
+}
+
+static void test_header_timeout(void)
+{
+    int sockets[2];
+    http_buffer buffer = {0};
+    http_request r = {0};
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    int64_t start = http_now_ms();
+    assert(http_receive_request(sockets[1], &buffer, &r,
+           start + HTTP_HEADER_TIMEOUT_MS) == HTTP_PARSE_ERROR);
+    assert(r.error == HTTP_HEADER_TIMEOUT);
+    int64_t elapsed = http_now_ms() - start;
+    assert(elapsed >= 5000 && elapsed < 7000);
+    free(buffer.data);
+    close(sockets[0]); close(sockets[1]);
+
+    /* Partial input must not reset the absolute deadline. */
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    pthread_t sender;
+    assert(pthread_create(&sender, NULL, trickle, &sockets[0]) == 0);
+    buffer = (http_buffer){0}; r = (http_request){0};
+    start = http_now_ms();
+    assert(http_receive_request(sockets[1], &buffer, &r, start + 200) == HTTP_PARSE_ERROR);
+    assert(r.error == HTTP_HEADER_TIMEOUT && buffer.length > 0);
+    elapsed = http_now_ms() - start;
+    assert(elapsed >= 200 && elapsed < 1000);
+    assert(pthread_join(sender, NULL) == 0);
+    free(buffer.data);
+    close(sockets[0]); close(sockets[1]);
+
+    /* Even available input cannot extend an already expired deadline. */
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    assert(write(sockets[0], "GET /", 5) == 5);
+    buffer = (http_buffer){0}; r = (http_request){0};
+    assert(http_receive_request(sockets[1], &buffer, &r, http_now_ms()-1) == HTTP_PARSE_ERROR);
+    assert(r.error == HTTP_HEADER_TIMEOUT);
+    free(buffer.data);
+    close(sockets[0]); close(sockets[1]);
 }
 
 int main(void)
@@ -54,7 +106,7 @@ int main(void)
     assert(write(sockets[0], head, strlen(head)) == (ssize_t)strlen(head));
     assert(write(sockets[0], body, sizeof(body)) == sizeof(body));
     http_buffer buffer = {0}; r = (http_request){0};
-    assert(http_receive_request(sockets[1], &buffer, &r) == HTTP_COMPLETE);
+    assert(http_receive_request(sockets[1], &buffer, &r, http_now_ms() + HTTP_HEADER_TIMEOUT_MS) == HTTP_COMPLETE);
     assert(buffer.capacity > 4096 && r.consumed == strlen(head) + sizeof(body));
     assert(!memcmp(buffer.data + r.method.offset, "GET", 3));
     free(buffer.data);
@@ -63,9 +115,11 @@ int main(void)
     assert(write(sockets[0], "GET /", 5) == 5);
     assert(shutdown(sockets[0], SHUT_WR) == 0);
     buffer = (http_buffer){0}; r = (http_request){0};
-    assert(http_receive_request(sockets[1], &buffer, &r) == HTTP_PARSE_ERROR);
+    assert(http_receive_request(sockets[1], &buffer, &r, http_now_ms() + HTTP_HEADER_TIMEOUT_MS) == HTTP_PARSE_ERROR);
     assert(r.error == HTTP_INCOMPLETE_REQUEST);
     free(buffer.data);
     close(sockets[0]); close(sockets[1]);
+    test_header_timeout();
+    puts("HTTP header timeout: idle 5s, trickle and expired deadline passed");
     puts("HTTP request: parser, binary body, boundaries, receive growth and EOF passed");
 }

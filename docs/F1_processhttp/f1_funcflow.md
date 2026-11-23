@@ -63,3 +63,17 @@ accept()에서 conn_fd 획득
 - `http_parse_request()`: 헤더 완료 전에는 누적 헤더를 검사하고, 완료 후에는 본문 수신 길이만 확인한다. 소켓 I/O와 메모리 할당을 하지 않는다.
 - `find_crlf()`, `is_token()`, `header_is()`, `fail()`: 파서 내부의 경계 탐색·문자 검증·헤더 이름 비교·오류 반환 보조 함수다.
 - `http_request.header_length`: 본문 시작 위치, `content_length`: 본문 길이, `consumed`: 완성된 첫 요청의 전체 길이다.
+
+## 헤더 기한 처리
+
+```text
+accept 성공 → http_now_ms() + 5000으로 header_deadline 계산
+→ http_receive_request(..., header_deadline)
+  → 파싱 결과가 NEED_MORE이고 헤더 미완료
+  → wait_for_header(): 남은 기한으로 poll
+  → recv(MSG_DONTWAIT) → 누적 → 파서 반복
+  → 기한 초과이면 HTTP_HEADER_TIMEOUT
+→ 기존 main에서 버퍼 해제와 close
+```
+
+헤더 완료 이후에는 기존 본문 read 흐름을 유지한다. poll의 EINTR와 recv의 일시적인 EAGAIN은 같은 절대 기한으로 재시도한다.

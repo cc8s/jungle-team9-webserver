@@ -1,5 +1,9 @@
 #include "http_request.h"
 #include <errno.h>
+#include <limits.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <time.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,7 +126,32 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
     return HTTP_COMPLETE;
 }
 
-http_parse_result http_receive_request(int fd, http_buffer *buffer, http_request *r)
+int64_t http_now_ms(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return -1;
+    return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+/* Recompute the remaining time after every wakeup, including EINTR. */
+static http_request_error wait_for_header(int fd, int64_t deadline)
+{
+    for (;;) {
+        int64_t now = http_now_ms();
+        if (now < 0) return HTTP_READ_ERROR;
+        int64_t left = deadline - now;
+        if (left <= 0) return HTTP_HEADER_TIMEOUT;
+        struct pollfd socket = {fd, POLLIN, 0};
+        int result = poll(&socket, 1, left > INT_MAX ? INT_MAX : (int)left);
+        if (result < 0 && errno == EINTR) continue;
+        if (result < 0 || (socket.revents & POLLNVAL)) return HTTP_READ_ERROR;
+        if (!result) continue;
+        return HTTP_NO_ERROR;
+    }
+}
+
+http_parse_result http_receive_request(int fd, http_buffer *buffer, http_request *r,
+                                       int64_t header_deadline_ms)
 {
     for (;;) {
         http_parse_result result = http_parse_request(buffer->data, buffer->length, r);
@@ -136,7 +165,21 @@ http_parse_result http_receive_request(int fd, http_buffer *buffer, http_request
             buffer->data = grown;
             buffer->capacity = capacity;
         }
-        ssize_t n = read(fd, buffer->data + buffer->length, buffer->capacity - buffer->length);
+        ssize_t n;
+        if (!r->headers_complete) {
+            http_request_error error = wait_for_header(fd, header_deadline_ms);
+            if (error) return fail(r, error);
+            /* Per-call nonblocking receive prevents a read from outliving the
+               deadline; the socket itself keeps its original blocking mode. */
+            n = recv(fd, buffer->data + buffer->length,
+                     buffer->capacity - buffer->length, MSG_DONTWAIT);
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+            int64_t now = http_now_ms();
+            if (now < 0) return fail(r, HTTP_READ_ERROR);
+            if (now >= header_deadline_ms) return fail(r, HTTP_HEADER_TIMEOUT);
+        } else {
+            n = read(fd, buffer->data + buffer->length, buffer->capacity - buffer->length);
+        }
         if (n < 0 && errno == EINTR) continue;
         if (n < 0) return fail(r, HTTP_READ_ERROR);
         if (!n) return fail(r, HTTP_INCOMPLETE_REQUEST);
