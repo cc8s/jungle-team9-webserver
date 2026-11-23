@@ -10,7 +10,8 @@ main()
   bind()                 ← 현재 포트 8000
   listen()
   while (1)
-    accept()             ← 클라이언트 연결 FD 획득
+    accept()             ← 블로킹 리스닝 소켓
+    기한 기록 → fcntl(conn_fd, F_SETFL, 기존 플래그 | O_NONBLOCK)
     http_receive_request(conn_fd, &buffer, &request)
       http_parse_request(buffer.data, buffer.length, &request)
       NEED_MORE이면 버퍼 확장 및 read 후 반복
@@ -71,7 +72,7 @@ accept 성공 → http_now_ms() + 5000으로 header_deadline 계산
 → http_receive_request(..., header_deadline)
   → 파싱 결과가 NEED_MORE이고 헤더 미완료
   → wait_for_data(): 남은 기한으로 poll
-  → recv(MSG_DONTWAIT) → 누적 → 파서 반복
+  → recv(..., 0) → 누적 → 파서 반복
   → 기한 초과이면 HTTP_HEADER_TIMEOUT
 → 기존 main에서 버퍼 해제와 close
 ```
@@ -115,4 +116,8 @@ http_receive_request
   본문 기한 초과 → HTTP_BODY_TIMEOUT → B의 408
 ```
 
-wait_for_data는 헤더와 본문이 공유하는 대기 함수다. 소켓 모드를 바꾸지 않고 recv 호출에만 MSG_DONTWAIT를 사용한다.
+wait_for_data는 헤더와 본문이 공유하는 대기 함수다. 호출자가 설정한 논블로킹 conn_fd에서 recv(..., 0)를 사용한다.
+
+## 논블로킹 I/O 계약
+
+main이 accept 성공 후 conn_fd만 O_NONBLOCK으로 설정한다. A는 poll(POLLIN) → recv(..., 0), B는 poll(POLLOUT) → send(..., 0)를 반복한다. EAGAIN이면 남은 기한으로 다시 대기하고, 양수 반환만큼 처리 위치를 이동한다. B의 파일 읽기 버퍼는 16 KiB이며 별도의 1 KiB 송신 제한은 없다.
