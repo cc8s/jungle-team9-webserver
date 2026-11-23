@@ -15,12 +15,12 @@ main()
       http_parse_request(buffer.data, buffer.length, &request)
       NEED_MORE이면 버퍼 확장 및 read 후 반복
     파싱 결과 또는 오류 출력
-    TODO B               ← 응답 생성·쓰기 추가 위치
+    http_send_response(conn_fd, &buffer, &request)
     free(buffer.data)
     close(conn_fd)
 ```
 
-A(수신·파싱)를 구현했다. 기존 main의 초기화와 반복문은 유지하며 B(응답)는 아직 미구현이다.
+A(수신·파싱)와 B(응답)를 연결했다. 기존 main의 초기화와 반복문은 유지한다.
 
 ## 구현 단위
 
@@ -33,7 +33,7 @@ A(수신·파싱)를 구현했다. 기존 main의 초기화와 반복문은 유�
 
 POST 처리는 이후 구현한다. 각 단위의 상세 인터페이스와 타임아웃 구현 수단은 그릴링에서 합의한다. A만 완료된 시점에는 정상 HTTP 응답을 기대하지 않는다.
 
-## 전체 흐름 — A 구현, B 미구현
+## 전체 흐름 — A/B 구현, 본문 타임아웃 미구현
 
 ```text
 accept()에서 conn_fd 획득
@@ -77,3 +77,28 @@ accept 성공 → http_now_ms() + 5000으로 header_deadline 계산
 ```
 
 헤더 완료 이후에는 기존 본문 read 흐름을 유지한다. poll의 EINTR와 recv의 일시적인 EAGAIN은 같은 절대 기한으로 재시도한다.
+
+## B 실제 호출 흐름
+
+```text
+main
+  A: http_receive_request
+  B: http_send_response
+    request_status → A 오류이면 send_error
+    GET 검사 → 그 외 send_error(405)
+    decode_path → get_mime_type → open_static → fstat
+    send_headers → send_all
+    파일 read → send_all 반복
+    close(file)
+  free(buffer.data)
+  close(conn_fd)
+```
+
+- `http_send_response`: B의 진입점. 성공 0, 전송 실패 -1을 반환한다.
+- `decode_path`: 쿼리를 먼저 분리하고 한 번 디코딩한 경로를 검증한다.
+- `open_static`: www부터 디렉토리 FD를 이동하며 파일을 연다. 실패 시 중간 FD를 정리한다.
+- `send_headers`/`send_error`: 상태 라인·표준 헤더·오류 본문을 구성한다.
+- `send_all`: 부분 전송, EINTR/EAGAIN, 진행 없는 5초 제한을 처리한다.
+- `get_mime_type`/`reason`/`request_status`/`file_status`: MIME·상태 문구·오류 변환 보조 함수다.
+
+main의 기존 socket/bind/listen/accept 흐름과 포트 8000은 유지한다. B는 수신 버퍼와 연결 FD의 소유권을 가져가지 않는다.

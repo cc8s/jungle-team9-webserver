@@ -1,4 +1,5 @@
 #include "http_request.h"
+#include "http_response.h"
 #include <sys/types.h>
 #include <sys/socket.h> // socket, bind, listen, accept
 #include <netinet/in.h> // sockaddr_in, INADDR_ANY, htons
@@ -84,7 +85,9 @@ int main(int argc, char **argv){
         } else {
             fprintf(stderr, "request error: %d\n", request.error);
         }
-        // TODO B: request와 buffer를 이용해 응답 생성·쓰기.
+        // B: 파싱 결과로 응답 생성·쓰기. 실패하면 추가 응답 없이 정리한다.
+        if (http_send_response(conn_fd, &buffer, &request) < 0)
+            fprintf(stderr, "response send failed\n");
         free(buffer.data);
         // 이 처리가 끝난 뒤에만 다음 연결을 accept한다.
 
