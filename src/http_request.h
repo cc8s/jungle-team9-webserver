@@ -38,7 +38,8 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
                                      http_request *request);
 /* Monotonic milliseconds, or -1 on clock failure. */
 int64_t http_now_ms(void);
-/* Header deadline is absolute; caller owns fd and frees buffer after B. */
+/* fd must be O_NONBLOCK. Header deadline is absolute.
+   Caller owns fd and frees the buffer after B. */
 http_parse_result http_receive_request(int fd, http_buffer *buffer,
                                        http_request *request, int64_t header_deadline_ms);
 #endif

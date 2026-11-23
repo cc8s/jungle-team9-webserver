@@ -16,6 +16,12 @@ typedef struct {
     http_request request;
 } response_job;
 
+static void nonblocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL);
+    assert(flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0);
+}
+
 static void *respond(void *argument)
 {
     response_job *job = argument;
@@ -35,7 +41,10 @@ static void check(const char *method, const char *target, int expected,
     assert(http_parse_request(job.buffer.data, job.buffer.length, &job.request) == HTTP_COMPLETE);
     int sockets[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    nonblocking(sockets[0]);
     job.fd = sockets[0];
+    int send_buffer = 4096;
+    assert(setsockopt(job.fd, SOL_SOCKET, SO_SNDBUF, &send_buffer, sizeof(send_buffer)) == 0);
     pthread_t worker;
     assert(pthread_create(&worker, NULL, respond, &job) == 0);
     unsigned char output[100000];
@@ -101,6 +110,7 @@ int main(void)
     };
     for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
         int pair[2]; assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+        nonblocking(pair[0]);
         http_request request = {.error = cases[i].error};
         http_buffer buffer = {0};
         assert(http_send_response(pair[0], &buffer, &request) == 0);
@@ -114,12 +124,14 @@ int main(void)
     assert(file >= 0 && ftruncate(file, 4*1024*1024) == 0); close(file);
     int pair[2], small = 4096;
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    nonblocking(pair[0]);
     assert(setsockopt(pair[0], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small)) == 0);
     unsigned char wire[] = "GET /large HTTP/1.1\r\nHost: x\r\n\r\n";
     http_buffer buffer = {.data = wire, .length = sizeof(wire)-1};
     http_request request = {0};
     assert(http_parse_request(wire, sizeof(wire)-1, &request) == HTTP_COMPLETE);
     int flags = fcntl(pair[0], F_GETFL);
+    assert(flags & O_NONBLOCK);
     int64_t start = http_now_ms();
     assert(http_send_response(pair[0], &buffer, &request) == -1);
     int64_t elapsed = http_now_ms()-start;

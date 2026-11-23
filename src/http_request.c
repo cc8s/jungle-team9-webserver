@@ -181,9 +181,9 @@ http_parse_result http_receive_request(int fd, http_buffer *buffer, http_request
         http_request_error timeout = r->headers_complete ? HTTP_BODY_TIMEOUT : HTTP_HEADER_TIMEOUT;
         http_request_error error = wait_for_data(fd, deadline, timeout);
         if (error) return fail(r, error);
-        /* Only this receive is nonblocking; preserve the socket's mode. */
+        /* Caller supplies an O_NONBLOCK connection. */
         ssize_t n = recv(fd, buffer->data + buffer->length,
-                         buffer->capacity - buffer->length, MSG_DONTWAIT);
+                         buffer->capacity - buffer->length, 0);
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         int64_t now = http_now_ms();
         if (now < 0) return fail(r, HTTP_READ_ERROR);

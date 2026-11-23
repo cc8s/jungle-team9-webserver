@@ -1,5 +1,6 @@
 #include "http_request.h"
 #include <assert.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <time.h>
 #include <stdio.h>
@@ -7,6 +8,12 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+static void nonblocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL);
+    assert(flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0);
+}
 
 static void error(const char *text, http_request_error expected)
 {
@@ -32,6 +39,7 @@ static void test_header_timeout(void)
     http_buffer buffer = {0};
     http_request r = {0};
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    nonblocking(sockets[1]);
     int64_t start = http_now_ms();
     assert(http_receive_request(sockets[1], &buffer, &r,
            start + HTTP_HEADER_TIMEOUT_MS) == HTTP_PARSE_ERROR);
@@ -43,6 +51,7 @@ static void test_header_timeout(void)
 
     /* Partial input must not reset the absolute deadline. */
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    nonblocking(sockets[1]);
     pthread_t sender;
     assert(pthread_create(&sender, NULL, trickle, &sockets[0]) == 0);
     buffer = (http_buffer){0}; r = (http_request){0};
@@ -57,6 +66,7 @@ static void test_header_timeout(void)
 
     /* Even available input cannot extend an already expired deadline. */
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    nonblocking(sockets[1]);
     assert(write(sockets[0], "GET /", 5) == 5);
     buffer = (http_buffer){0}; r = (http_request){0};
     assert(http_receive_request(sockets[1], &buffer, &r, http_now_ms()-1) == HTTP_PARSE_ERROR);
@@ -80,6 +90,7 @@ static void test_body_policy(void)
 {
     int pair[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    nonblocking(pair[1]);
     const char *get = "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n";
     assert(write(pair[0], get, strlen(get)) == (ssize_t)strlen(get));
     http_buffer buffer = {0};
@@ -90,6 +101,7 @@ static void test_body_policy(void)
     free(buffer.data); close(pair[0]); close(pair[1]);
 
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    nonblocking(pair[1]);
     const char *post = "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\na";
     assert(write(pair[0], post, strlen(post)) == (ssize_t)strlen(post));
     pthread_t sender;
@@ -140,6 +152,7 @@ int main(void)
     /* Real blocking receive: force growth beyond the initial 4 KiB. */
     int sockets[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    nonblocking(sockets[1]);
     const char *head = "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5000\r\n\r\n";
     unsigned char body[5000] = {0};
     assert(write(sockets[0], head, strlen(head)) == (ssize_t)strlen(head));
@@ -151,6 +164,7 @@ int main(void)
     free(buffer.data);
     close(sockets[0]); close(sockets[1]);
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    nonblocking(sockets[1]);
     assert(write(sockets[0], "GET /", 5) == 5);
     assert(shutdown(sockets[0], SHUT_WR) == 0);
     buffer = (http_buffer){0}; r = (http_request){0};

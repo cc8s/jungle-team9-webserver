@@ -21,9 +21,7 @@ static int send_all(int fd, const void *data, size_t length, int64_t *deadline)
         int ready = poll(&socket, 1, (int)(*deadline - now));
         if (ready < 0 && errno == EINTR) continue;
         if (ready <= 0) return -1;
-        /* Keep each attempt small even when the send buffer is tiny. */
-        size_t count = length > 1024 ? 1024 : length;
-        ssize_t n = send(fd, p, count, MSG_DONTWAIT);
+        ssize_t n = send(fd, p, length, 0);
         if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         if (n <= 0) return -1;
         p += n;

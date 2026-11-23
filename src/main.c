@@ -74,6 +74,14 @@ int main(int argc, char **argv){
         }
         int64_t header_deadline = accepted_at + HTTP_HEADER_TIMEOUT_MS;
 
+        // 리스닝 소켓은 유지하고, 이 연결의 I/O만 논블로킹으로 처리한다.
+        int flags = fcntl(conn_fd, F_GETFL);
+        if (flags < 0 || fcntl(conn_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+            perror("fcntl O_NONBLOCK");
+            close(conn_fd);
+            continue;
+        }
+
         // A: 요청 수신·파싱. B에서 사용할 때까지 buffer를 유지한다.
         http_buffer buffer = {0};
         http_request request = {0};
