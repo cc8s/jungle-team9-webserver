@@ -33,7 +33,7 @@ A(수신·파싱)와 B(응답)를 연결했다. 기존 main의 초기화와 반�
 
 POST 처리는 이후 구현한다. 각 단위의 상세 인터페이스와 타임아웃 구현 수단은 그릴링에서 합의한다. A만 완료된 시점에는 정상 HTTP 응답을 기대하지 않는다.
 
-## 전체 흐름 — A/B 구현, 본문 타임아웃 미구현
+## 전체 흐름 — A/B 및 본문 타임아웃 구현
 
 ```text
 accept()에서 conn_fd 획득
@@ -70,13 +70,13 @@ accept()에서 conn_fd 획득
 accept 성공 → http_now_ms() + 5000으로 header_deadline 계산
 → http_receive_request(..., header_deadline)
   → 파싱 결과가 NEED_MORE이고 헤더 미완료
-  → wait_for_header(): 남은 기한으로 poll
+  → wait_for_data(): 남은 기한으로 poll
   → recv(MSG_DONTWAIT) → 누적 → 파서 반복
   → 기한 초과이면 HTTP_HEADER_TIMEOUT
 → 기존 main에서 버퍼 해제와 close
 ```
 
-헤더 완료 이후에는 기존 본문 read 흐름을 유지한다. poll의 EINTR와 recv의 일시적인 EAGAIN은 같은 절대 기한으로 재시도한다.
+헤더 완료 이후 POST는 본문 기한을 적용한 poll/recv 흐름을 사용하고, 다른 메서드는 헤더에서 완료한다. poll의 EINTR와 recv의 일시적인 EAGAIN은 같은 절대 기한으로 재시도한다.
 
 ## B 실제 호출 흐름
 
@@ -102,3 +102,17 @@ main
 - `get_mime_type`/`reason`/`request_status`/`file_status`: MIME·상태 문구·오류 변환 보조 함수다.
 
 main의 기존 socket/bind/listen/accept 흐름과 포트 8000은 유지한다. B는 수신 버퍼와 연결 FD의 소유권을 가져가지 않는다.
+
+## 본문 기한과 메서드 분기
+
+```text
+http_parse_request
+  헤더 검증 → 비POST: consumed = header_length, COMPLETE
+            → POST: 본문 부족이면 NEED_MORE
+http_receive_request
+  POST 헤더 완료·본문 부족 → body_deadline = 현재 + 10000 (한 번만)
+  wait_for_data(본문 기한, HTTP_BODY_TIMEOUT) → recv → 파싱 반복
+  본문 기한 초과 → HTTP_BODY_TIMEOUT → B의 408
+```
+
+wait_for_data는 헤더와 본문이 공유하는 대기 함수다. 소켓 모드를 바꾸지 않고 recv 호출에만 MSG_DONTWAIT를 사용한다.

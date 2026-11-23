@@ -62,7 +62,7 @@ static int request_status(http_request_error error)
     case HTTP_BODY_TOO_LARGE: return 413;
     case HTTP_UNSUPPORTED_TRANSFER: return 501;
     case HTTP_UNSUPPORTED_VERSION: return 505;
-    case HTTP_HEADER_TIMEOUT: return 408;
+    case HTTP_HEADER_TIMEOUT: case HTTP_BODY_TIMEOUT: return 408;
     case HTTP_READ_ERROR: case HTTP_NO_MEMORY: return 500;
     default: return 400;
     }

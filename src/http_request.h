@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define HTTP_HEADER_TIMEOUT_MS 5000
+#define HTTP_BODY_TIMEOUT_MS 10000
 #define HTTP_LINE_LIMIT 8192
 #define HTTP_HEADER_LIMIT 32768
 #define HTTP_BODY_LIMIT 1048576
@@ -16,7 +17,7 @@ typedef enum {
     HTTP_HEADERS_TOO_LARGE, HTTP_BODY_TOO_LARGE,
     HTTP_UNSUPPORTED_TRANSFER, HTTP_UNSUPPORTED_VERSION,
     HTTP_READ_ERROR, HTTP_INCOMPLETE_REQUEST, HTTP_NO_MEMORY,
-    HTTP_HEADER_TIMEOUT
+    HTTP_HEADER_TIMEOUT, HTTP_BODY_TIMEOUT
 } http_request_error;
 
 typedef struct {
@@ -31,7 +32,8 @@ typedef struct {
     size_t length, capacity;
 } http_buffer;
 
-/* Initialize request to zero. Keep the same accumulated buffer between calls. */
+/* Zero-initialize request. POST waits for its body; other methods stop at headers.
+   consumed is the parsed prefix, so ignored body bytes are not included. */
 http_parse_result http_parse_request(const unsigned char *data, size_t length,
                                      http_request *request);
 /* Monotonic milliseconds, or -1 on clock failure. */

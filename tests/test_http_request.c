@@ -65,16 +65,55 @@ static void test_header_timeout(void)
     close(sockets[0]); close(sockets[1]);
 }
 
+static void *body_trickle(void *argument)
+{
+    int fd = *(int *)argument;
+    struct timespec delay = {2, 0};
+    for (int i = 0; i < 4; i++) {
+        nanosleep(&delay, NULL);
+        assert(write(fd, "x", 1) == 1);
+    }
+    return NULL;
+}
+
+static void test_body_policy(void)
+{
+    int pair[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    const char *get = "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n";
+    assert(write(pair[0], get, strlen(get)) == (ssize_t)strlen(get));
+    http_buffer buffer = {0};
+    http_request r = {0};
+    int64_t start = http_now_ms();
+    assert(http_receive_request(pair[1], &buffer, &r, start + 5000) == HTTP_COMPLETE);
+    assert(http_now_ms()-start < 1000 && r.consumed == strlen(get) && r.content_length == 100);
+    free(buffer.data); close(pair[0]); close(pair[1]);
+
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    const char *post = "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\na";
+    assert(write(pair[0], post, strlen(post)) == (ssize_t)strlen(post));
+    pthread_t sender;
+    assert(pthread_create(&sender, NULL, body_trickle, &pair[0]) == 0);
+    buffer = (http_buffer){0}; r = (http_request){0};
+    start = http_now_ms();
+    assert(http_receive_request(pair[1], &buffer, &r, start + 5000) == HTTP_PARSE_ERROR);
+    assert(r.error == HTTP_BODY_TIMEOUT && r.headers_complete);
+    int64_t elapsed = http_now_ms()-start;
+    assert(elapsed >= 10000 && elapsed < 12000);
+    assert(pthread_join(sender, NULL) == 0);
+    free(buffer.data); close(pair[0]); close(pair[1]);
+}
+
 int main(void)
 {
-    const unsigned char data[] = "GET /file?q=1 HTTP/1.1\r\nhOsT: localhost\r\nContent-Length: 4\r\n\r\n\0\r\nxNEXT";
+    const unsigned char data[] = "POST /file?q=1 HTTP/1.1\r\nhOsT: localhost\r\nContent-Length: 4\r\n\r\n\0\r\nxNEXT";
     http_request r = {0};
     size_t request_length = sizeof(data)-1-4;
     for (size_t n = 0; n < request_length; n++)
         assert(http_parse_request(data, n, &r) == HTTP_NEED_MORE);
     assert(http_parse_request(data, sizeof(data)-1, &r) == HTTP_COMPLETE);
     assert(r.content_length == 4 && r.consumed == request_length);
-    assert(r.method.length == 3 && !memcmp(data + r.method.offset, "GET", 3));
+    assert(r.method.length == 4 && !memcmp(data + r.method.offset, "POST", 4));
     assert(r.target.length == 9 && !memcmp(data + r.target.offset, "/file?q=1", 9));
     error("GET / HTTP/1.1\r\n\r\n", HTTP_BAD_REQUEST);
     error("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n", HTTP_BAD_REQUEST);
@@ -101,14 +140,14 @@ int main(void)
     /* Real blocking receive: force growth beyond the initial 4 KiB. */
     int sockets[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
-    const char *head = "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 5000\r\n\r\n";
+    const char *head = "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5000\r\n\r\n";
     unsigned char body[5000] = {0};
     assert(write(sockets[0], head, strlen(head)) == (ssize_t)strlen(head));
     assert(write(sockets[0], body, sizeof(body)) == sizeof(body));
     http_buffer buffer = {0}; r = (http_request){0};
     assert(http_receive_request(sockets[1], &buffer, &r, http_now_ms() + HTTP_HEADER_TIMEOUT_MS) == HTTP_COMPLETE);
     assert(buffer.capacity > 4096 && r.consumed == strlen(head) + sizeof(body));
-    assert(!memcmp(buffer.data + r.method.offset, "GET", 3));
+    assert(!memcmp(buffer.data + r.method.offset, "POST", 4));
     free(buffer.data);
     close(sockets[0]); close(sockets[1]);
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
@@ -120,6 +159,8 @@ int main(void)
     free(buffer.data);
     close(sockets[0]); close(sockets[1]);
     test_header_timeout();
+    test_body_policy();
+    puts("HTTP body policy: GET skips body; POST fixed 10s deadline passed");
     puts("HTTP header timeout: idle 5s, trickle and expired deadline passed");
     puts("HTTP request: parser, binary body, boundaries, receive growth and EOF passed");
 }

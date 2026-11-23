@@ -97,7 +97,7 @@ int main(void)
     const struct { http_request_error error; int status; } cases[] = {
         {HTTP_BAD_REQUEST,400}, {HTTP_LINE_TOO_LONG,414}, {HTTP_HEADERS_TOO_LARGE,431},
         {HTTP_BODY_TOO_LARGE,413}, {HTTP_UNSUPPORTED_TRANSFER,501},
-        {HTTP_UNSUPPORTED_VERSION,505}, {HTTP_HEADER_TIMEOUT,408}, {HTTP_NO_MEMORY,500}
+        {HTTP_UNSUPPORTED_VERSION,505}, {HTTP_BODY_TIMEOUT,408}, {HTTP_HEADER_TIMEOUT,408}, {HTTP_NO_MEMORY,500}
     };
     for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
         int pair[2]; assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);

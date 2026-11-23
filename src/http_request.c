@@ -121,6 +121,11 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
         r->header_length = header_end;
         r->headers_complete = 1;
     }
+    /* Only POST needs a body. Other methods are handled using headers alone. */
+    if (r->method.length != 4 || memcmp(data + r->method.offset, "POST", 4)) {
+        r->consumed = r->header_length;
+        return HTTP_COMPLETE;
+    }
     if (length < r->header_length + r->content_length) return HTTP_NEED_MORE;
     r->consumed = r->header_length + r->content_length;
     return HTTP_COMPLETE;
@@ -134,13 +139,14 @@ int64_t http_now_ms(void)
 }
 
 /* Recompute the remaining time after every wakeup, including EINTR. */
-static http_request_error wait_for_header(int fd, int64_t deadline)
+static http_request_error wait_for_data(int fd, int64_t deadline,
+                                         http_request_error timeout_error)
 {
     for (;;) {
         int64_t now = http_now_ms();
         if (now < 0) return HTTP_READ_ERROR;
         int64_t left = deadline - now;
-        if (left <= 0) return HTTP_HEADER_TIMEOUT;
+        if (left <= 0) return timeout_error;
         struct pollfd socket = {fd, POLLIN, 0};
         int result = poll(&socket, 1, left > INT_MAX ? INT_MAX : (int)left);
         if (result < 0 && errno == EINTR) continue;
@@ -153,9 +159,15 @@ static http_request_error wait_for_header(int fd, int64_t deadline)
 http_parse_result http_receive_request(int fd, http_buffer *buffer, http_request *r,
                                        int64_t header_deadline_ms)
 {
+    int64_t body_deadline_ms = 0;
     for (;;) {
         http_parse_result result = http_parse_request(buffer->data, buffer->length, r);
         if (result != HTTP_NEED_MORE) return result;
+        if (r->headers_complete && !body_deadline_ms) {
+            int64_t now = http_now_ms();
+            if (now < 0) return fail(r, HTTP_READ_ERROR);
+            body_deadline_ms = now + HTTP_BODY_TIMEOUT_MS;
+        }
         if (buffer->length == buffer->capacity) {
             size_t capacity = buffer->capacity ? buffer->capacity * 2 : 4096;
             if (capacity > HTTP_REQUEST_LIMIT) capacity = HTTP_REQUEST_LIMIT;
@@ -165,21 +177,17 @@ http_parse_result http_receive_request(int fd, http_buffer *buffer, http_request
             buffer->data = grown;
             buffer->capacity = capacity;
         }
-        ssize_t n;
-        if (!r->headers_complete) {
-            http_request_error error = wait_for_header(fd, header_deadline_ms);
-            if (error) return fail(r, error);
-            /* Per-call nonblocking receive prevents a read from outliving the
-               deadline; the socket itself keeps its original blocking mode. */
-            n = recv(fd, buffer->data + buffer->length,
-                     buffer->capacity - buffer->length, MSG_DONTWAIT);
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
-            int64_t now = http_now_ms();
-            if (now < 0) return fail(r, HTTP_READ_ERROR);
-            if (now >= header_deadline_ms) return fail(r, HTTP_HEADER_TIMEOUT);
-        } else {
-            n = read(fd, buffer->data + buffer->length, buffer->capacity - buffer->length);
-        }
+        int64_t deadline = r->headers_complete ? body_deadline_ms : header_deadline_ms;
+        http_request_error timeout = r->headers_complete ? HTTP_BODY_TIMEOUT : HTTP_HEADER_TIMEOUT;
+        http_request_error error = wait_for_data(fd, deadline, timeout);
+        if (error) return fail(r, error);
+        /* Only this receive is nonblocking; preserve the socket's mode. */
+        ssize_t n = recv(fd, buffer->data + buffer->length,
+                         buffer->capacity - buffer->length, MSG_DONTWAIT);
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+        int64_t now = http_now_ms();
+        if (now < 0) return fail(r, HTTP_READ_ERROR);
+        if (now >= deadline) return fail(r, timeout);
         if (n < 0 && errno == EINTR) continue;
         if (n < 0) return fail(r, HTTP_READ_ERROR);
         if (!n) return fail(r, HTTP_INCOMPLETE_REQUEST);
