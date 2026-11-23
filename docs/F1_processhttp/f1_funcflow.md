@@ -11,11 +11,16 @@ main()
   listen()
   while (1)
     accept()             ← 클라이언트 연결 FD 획득
-    TODO                 ← HTTP 처리 추가 위치
+    http_receive_request(conn_fd, &buffer, &request)
+      http_parse_request(buffer.data, buffer.length, &request)
+      NEED_MORE이면 버퍼 확장 및 read 후 반복
+    파싱 결과 또는 오류 출력
+    TODO B               ← 응답 생성·쓰기 추가 위치
+    free(buffer.data)
     close(conn_fd)
 ```
 
-현재는 HTTP 수신·파싱·응답 함수가 없다. 기존 main의 초기화와 반복문을 출발점으로 사용한다.
+A(수신·파싱)를 구현했다. 기존 main의 초기화와 반복문은 유지하며 B(응답)는 아직 미구현이다.
 
 ## 구현 단위
 
@@ -28,7 +33,7 @@ main()
 
 POST 처리는 이후 구현한다. 각 단위의 상세 인터페이스와 타임아웃 구현 수단은 그릴링에서 합의한다. A만 완료된 시점에는 정상 HTTP 응답을 기대하지 않는다.
 
-## 최종 목표 흐름 — 아직 미구현
+## 전체 흐름 — A 구현, B 미구현
 
 ```text
 accept()에서 conn_fd 획득
@@ -48,6 +53,13 @@ accept()에서 conn_fd 획득
 
 - `conn_fd`: 현재 main이 획득하고 닫는다. 소유권을 바꿀 때는 먼저 합의한다.
 - 수신 버퍼: 유효 바이트 수를 별도로 관리한다. 본문 길이는 strlen으로 계산하지 않는다.
-- 파싱 필드: 버퍼 참조 또는 복사 방식은 미정이다. 참조 방식이면 버퍼 이동·해제 시점을 명확히 한다.
+- 파싱 필드: `http_field`의 offset·length로 보관한다. 사용 시 `buffer.data + offset`으로 접근하며 NUL 종료 문자열로 취급하지 않는다.
 - 파일 FD와 파일 전송 버퍼: 해당 단계에서 수명과 정리 위치를 명시한다.
 - 파일 전송 중 실패: 이미 전송한 상태 라인을 바꾸려 하지 않고 정리 경로로 이동한다.
+
+## A 함수별 역할
+
+- `http_receive_request()`: 파서를 호출하고 부족하면 4 KiB부터 버퍼를 확장하여 read한다. EINTR는 재시도하고 EOF와 I/O 오류는 구분한다. 연결 FD와 버퍼를 해제하지 않는다.
+- `http_parse_request()`: 헤더 완료 전에는 누적 헤더를 검사하고, 완료 후에는 본문 수신 길이만 확인한다. 소켓 I/O와 메모리 할당을 하지 않는다.
+- `find_crlf()`, `is_token()`, `header_is()`, `fail()`: 파서 내부의 경계 탐색·문자 검증·헤더 이름 비교·오류 반환 보조 함수다.
+- `http_request.header_length`: 본문 시작 위치, `content_length`: 본문 길이, `consumed`: 완성된 첫 요청의 전체 길이다.

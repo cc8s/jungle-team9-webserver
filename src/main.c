@@ -1,3 +1,4 @@
+#include "http_request.h"
 #include <sys/types.h>
 #include <sys/socket.h> // socket, bind, listen, accept
 #include <netinet/in.h> // sockaddr_in, INADDR_ANY, htons
@@ -63,7 +64,19 @@ int main(int argc, char **argv){
             continue;
         }
 
-        // TODO: conn_fd로 요청을 읽고 응답을 보내는 코드를 작성한다.
+        // A: 요청 수신·파싱. B에서 사용할 때까지 buffer를 유지한다.
+        http_buffer buffer = {0};
+        http_request request = {0};
+        if (http_receive_request(conn_fd, &buffer, &request) == HTTP_COMPLETE) {
+            printf("request: %.*s %.*s (%zu bytes)\n",
+                   (int)request.method.length, buffer.data + request.method.offset,
+                   (int)request.target.length, buffer.data + request.target.offset,
+                   request.consumed);
+        } else {
+            fprintf(stderr, "request error: %d\n", request.error);
+        }
+        // TODO B: request와 buffer를 이용해 응답 생성·쓰기.
+        free(buffer.data);
         // 이 처리가 끝난 뒤에만 다음 연결을 accept한다.
 
         close(conn_fd);
