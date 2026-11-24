@@ -179,3 +179,11 @@ make test BUILD=build/f1-host-sanitize TBIN=tests/bin/f1-host-sanitize \
 - `make test`: 세 API × Content-Type 4종의 빈 본문이 400 invalid_body인지 단위 검증하고, socketpair 통합 테스트에서 세 API의 빈 본문 400을 확인한다. 실제 결과: 전체 C 테스트 및 Python 업로드 도구 테스트 통과.
 - socketpair 클라이언트의 shutdown은 서버가 먼저 종료한 경우 ENOTCONN을 허용한다. 응답 상태·본문·길이 검증은 유지한다.
 - 과거 수동 TCP 및 category3 기록의 빈 본문 200은 변경 전 정책의 결과다.
+
+## 업로드 content_type 및 폼 NUL 검증 (2026-11-24)
+
+- `make tests/bin/test_json tests/bin/test_post tests/bin/test_post_boundaries` 후 세 실행 파일 실행: 모두 통과.
+- test_post: 업로드 JSON의 content_type이 빈 문자열이면 400이며 저장 파일이 생성되지 않는다. 폼 키·값의 %00도 400이다.
+- test_json: 키·값의 %00 및 원문 NUL 6종이 400이고 결과 객체가 NULL인지 확인한다. 한글·공백 변환, JSON의 이스케이프된 NUL 보존도 통과.
+- test_post 및 test_post_boundaries: 바이너리 업로드의 NUL 보존, 0바이트 파일, 1 MiB 경계 및 HTTP 응답 검증 통과.
+- 빈 세그먼트 정책은 미결정이다. `a=1&`는 후행 세그먼트를 무시하지만 `&a=1`과 `a=1&&b=2`는 빈 키·값 필드를 생성한다. `&&`는 빈 키 중복으로 400이 된다. 이번 변경에서는 그대로 둔다.

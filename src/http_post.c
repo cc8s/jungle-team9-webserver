@@ -227,7 +227,8 @@ static int upload(const json_value *root, json_output *data)
                      *type = json_member(root, "content_type");
     const json_value *encoding = json_member(root, "encoding"), *text = json_member(root, "data");
     if (!filename || !type || !encoding || !text || filename->type != JSON_STRING ||
-        type->type != JSON_STRING || encoding->type != JSON_STRING || text->type != JSON_STRING ||
+        type->type != JSON_STRING || !type->text.length || encoding->type != JSON_STRING ||
+        text->type != JSON_STRING ||
         encoding->text.length != 6 || memcmp(encoding->text.data, "base64", 6))
         return 400;
     unsigned char *bytes;

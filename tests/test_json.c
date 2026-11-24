@@ -82,10 +82,19 @@ int main(void)
         expect(out.data, total == 10000 ? 0 : 413);
         free(out.data);
     }
-    const char *form = "name=%ED%99%8D%EA%B8%B8%EB%8F%99&note=a+b&zero=%00";
+    const char *form = "name=%ED%99%8D%EA%B8%B8%EB%8F%99&note=a+b";
     assert(!form_parse((unsigned char *)form, strlen(form), &v));
-    assert(json_member(v, "name")->text.length == 9 && json_member(v, "zero")->text.length == 1);
+    assert(json_member(v, "name")->text.length == 9);
     json_free(v);
+    const char *nul_forms[] = {"key=%00", "%00=value", "a=ok&b=x%00y", "a%00b=value"};
+    for (size_t i = 0; i < sizeof(nul_forms) / sizeof(nul_forms[0]); i++) {
+        assert(form_parse((const unsigned char *)nul_forms[i], strlen(nul_forms[i]), &v) == 400);
+        assert(v == NULL);
+    }
+    const unsigned char raw_value[] = {'k', '=', 'a', 0, 'b'};
+    const unsigned char raw_key[] = {'k', 0, '=', 'v'};
+    assert(form_parse(raw_value, sizeof(raw_value), &v) == 400 && v == NULL);
+    assert(form_parse(raw_key, sizeof(raw_key), &v) == 400 && v == NULL);
     assert(form_parse((unsigned char *)"name=a&%6eame=b", 14, &v) == 400);
     assert(form_parse((unsigned char *)"x=%zz", 5, &v) == 400);
     for (int n = 100; n <= 101; n++) {

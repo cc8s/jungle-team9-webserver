@@ -459,6 +459,10 @@ static int form_decode(const unsigned char *data, size_t length, json_bytes *tex
             i += 2;
         } else if (c == '+')
             c = ' ';
+        if (c == 0) {
+            free(out.data);
+            return 400;
+        }
         if (json_append(&out, (char *)&c, 1)) {
             free(out.data);
             return 500;

@@ -258,3 +258,9 @@ test_transfer_timing은 실제 수신·응답 소스를 테스트 번역 단위�
 test_fault_recovery는 실제 수신·GET·POST·응답 소스를 테스트 번역 단위에 포함하고 syscall 래퍼로 EINTR·I/O 오류·실제 EEXIST를 주입한다. 수신·전송 재시도, 부분 파일 응답 중단, 업로드 cleanup 이후 기존 파일 내용·신규 파일 개수·FD 닫힘을 확인한다. 고정/역행 CLOCK_REALTIME과 충돌 직전 sentinel 생성은 별도 분기다.
 
 test_stability의 반복 요청은 socketpair → http_receive_request → http_send_response → free/close/생성 파일 삭제 순서로 4,400회 처리하고 FD·RSS를 계측한다. TCP는 포트 0 loopback listener → fork/accept → 제품 수신·응답 함수와 실제 느린 읽기/무수신 상대를 사용한다. 강제 종료는 실제 업로드 write 일부 성공 → SIGKILL → 부모의 잔존 파일 크기·권한 관찰 → 테스트 파일 정리로 흐른다. 제품 main이나 자원 소유권은 변경하지 않았다.
+
+### POST 입력 검증 보강
+
+- `/api/upload → upload`: 필수 문자열 타입 확인 후 content_type 길이가 0이면 400을 반환하며 저장하지 않는다.
+- `/api/form → form_parse → form_decode`: 키·값의 %XX 및 + 해석 후 바이트가 NUL이면 400을 반환한다. form_parse가 중간 객체를 해제하고 post_prepare가 invalid_body 응답을 만든다.
+- 빈 세그먼트 처리 정책은 미결정으로 기존 흐름을 유지한다.

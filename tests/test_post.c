@@ -113,6 +113,9 @@ static void test_upload_inputs(void)
         expect("/api/upload", body, "application/json", 400);
         assert(upload_file_count() == 0);
     }
+    expect("/api/upload", "{\"filename\":\"x\",\"content_type\":\"\",\"encoding\":\"base64\",\"data\":\"AAEC\"}",
+           "application/json", 400);
+    assert(upload_file_count() == 0);
     const unsigned char binary[] = {0, 1, 2};
     stored_upload("{\"filename\":\"photo.jpg\",\"content_type\":\"image/png\",\"encoding\":\"base64\",\"data\":\"AAEC\"}",
                   binary, sizeof(binary), (unsigned char *)"photo.jpg", 9, (unsigned char *)"image/png", 9);
@@ -136,7 +139,7 @@ static void test_upload_inputs(void)
     assert(close(fd) == 0 && upload_file_count() == 1);
     assert(unlink("uploads_storage/existing.bin") == 0 && rmdir("uploads_storage") == 0);
     assert(fchdir(original) == 0 && close(original) == 0 && rmdir(temp) == 0);
-    puts("POST upload inputs: 27 invalid combinations and 5 byte/metadata storage cases passed");
+    puts("POST upload inputs: 28 invalid combinations and 5 byte/metadata storage cases passed");
 }
 
 int main(void)
@@ -150,6 +153,8 @@ int main(void)
     expect("/api/users", "[]", "application/json", 400);
     expect("/api/users", "{bad}", "application/json", 400);
     expect("/api/form", "name=hello+world&age=25", "application/x-www-form-urlencoded", 200);
+    expect("/api/form", "name=a%00b", "application/x-www-form-urlencoded", 400);
+    expect("/api/form", "%00=value", "application/x-www-form-urlencoded", 400);
     expect("/api/form", "name=a&name=b", "application/x-www-form-urlencoded", 400);
     expect("/unknown", "", "application/json", 404);
     const char *paths[] = {"/api/users", "/api/form", "/api/upload"};
