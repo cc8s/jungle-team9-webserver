@@ -2,6 +2,7 @@
 #include "json.h"
 #include <assert.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -21,7 +22,9 @@ static void *client(void *argument)
         ssize_t n = write(j->fd, j->wire + sent, j->length - sent);
         assert(n > 0); sent += (size_t)n;
     }
-    assert(shutdown(j->fd, SHUT_WR) == 0);
+    /* The server may close after replying before this half-close runs. */
+    int stopped = shutdown(j->fd, SHUT_WR);
+    assert(stopped == 0 || (stopped == -1 && errno == ENOTCONN));
     for (;;) {
         ssize_t n = read(j->fd, j->output + j->used, 2*HTTP_BODY_LIMIT - j->used);
         assert(n >= 0);
@@ -134,7 +137,9 @@ int main(void)
     test_json_escaping(); test_body_boundaries();
     expect("/api/users", "application/json", "{}", 200);
     expect("/api/form", "application/x-www-form-urlencoded", "x=y", 200);
-    expect("/api/upload", NULL, "", 200);
+    expect("/api/users", "application/json", "", 400);
+    expect("/api/form", "application/x-www-form-urlencoded", "", 400);
+    expect("/api/upload", NULL, "", 400);
     expect("/api/users", "application/json", "{bad", 400);
     expect("/api/form", "application/x-www-form-urlencoded", "x=%zz", 400);
     expect("/api/upload", "application/json", "{}", 400);

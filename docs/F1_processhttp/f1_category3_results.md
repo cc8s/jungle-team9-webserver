@@ -21,7 +21,7 @@
 | /api/upload의 Base64 JSON+끝 공백 전체 정확히 1,048,576바이트 | 201, 디코딩 파일 크기·전체 NUL 바이트 보존 | 통과 |
 | /api/upload의 Content-Length 1,048,577 | 413, 추가 저장 파일 없음 | 통과 |
 | 따옴표·역슬래시·0x00~0x1F 전체 제어 문자·한글을 포함한 사용자 문자열 | 200, 응답 재파싱 후 원본 바이트·길이 일치, Content-Length 실제 바이트 일치 | 통과 |
-| users/form 성공, upload 명시적 빈 본문 성공 및 상한 업로드 저장 성공 | 200/201, Content-Type: application/json, 유효 JSON과 정확한 길이 | 통과 |
+| users/form 성공, upload 명시적 빈 본문 성공 및 상한 업로드 저장 성공 (당시 정책; 현재 빈 본문은 400 invalid_body) | 200/201, Content-Type: application/json, 유효 JSON과 정확한 길이 | 통과 |
 | users 잘못된 JSON, form 잘못된 %XX, upload 필수 필드 누락 | 400, application/json, 유효 JSON과 정확한 길이 | 통과 |
 | 없는 POST 경로 및 API 3종의 text/plain 본문 | 404/415, application/json, 유효 JSON과 정확한 길이 | 통과 |
 | request.error에 BAD_REQUEST, HEADER_TIMEOUT, BODY_TIMEOUT, LENGTH_REQUIRED, BODY_TOO_LARGE, LINE_TOO_LONG, HEADERS_TOO_LARGE, READ_ERROR, NO_MEMORY, UNSUPPORTED_TRANSFER, UNSUPPORTED_VERSION 주입 | 각각 400/408/408/411/413/414/431/500/500/501/505, application/json, 유효 JSON과 정확한 길이 | 통과 |

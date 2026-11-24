@@ -57,7 +57,7 @@
 | POST 처리 | [test_post.c](../../tests/test_post.c) · `run`/`expect` | /api/users 객체 결과, /api/form 키·값 결과를 JSON으로 재파싱 | 통과 — 자동 |
 | POST 처리 | [test_post.c](../../tests/test_post.c) · `expect` | 양수 본문의 타입 누락·미지원 타입·multipart·미지원 매개변수는 415, UTF-8 charset 허용 | 통과 — 자동 |
 | POST 처리 | [test_post.c](../../tests/test_post.c) · `expect` | 사용자 API의 배열·잘못된 JSON 400, 알 수 없는 경로 404 | 통과 — 자동 |
-| POST 처리 | [test_post.c](../../tests/test_post.c) · `expect` | /api/upload의 명시적 0길이 본문은 200, 파일 생성 없이 data:null | 통과 — 자동 |
+| POST 처리 | [test_post.c](../../tests/test_post.c) · `expect` | 세 API의 0길이 본문 × Content-Type 누락·빈 값·JSON·폼 12종은 400 invalid_body | 통과 — 자동 |
 | POST 통합 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 한글·중첩 사용자 JSON, 폼, 411/415 및 0길이 요청 확인 | 통과 — 수동 |
 | 업로드 저장 | [test_post.c](../../tests/test_post.c) | 기존 uploads_storage에서 201, 시각 기반 같은 ID의 .bin/.json 쌍 생성 | 통과 — 자동 |
 | 업로드 저장 | [test_post.c](../../tests/test_post.c) | 디코딩된 NUL·CRLF·0xFF 바이트, 메타데이터 원본명·크기, 두 파일 권한 0400 확인 | 통과 — 자동 |
@@ -173,3 +173,9 @@ make test BUILD=build/f1-host-sanitize TBIN=tests/bin/f1-host-sanitize \
 - 강제 종료 후 부분 bin과 빈 json이 남았다. 이를 원자성·fsync 내구성 통과로 표시하지 않는다. 작은 TCP 버퍼에서의 초기 전송 실패와 최종 조건 조정 이력은 상세 문서에 남겼다.
 
 새 C 테스트는 `make test`에 자동 포함된다. 네 최종 전체 검사 모두 Python 업로드 도구 경계 검사까지 통과했다. Linux에서 기존 test_post의 snprintf 경로에 format-truncation 경고가 있었으며 실행 실패는 없었다. 제품 코드·정책은 변경하지 않았다.
+
+## 빈 POST 본문 정책 변경 (2026-11-24)
+
+- `make test`: 세 API × Content-Type 4종의 빈 본문이 400 invalid_body인지 단위 검증하고, socketpair 통합 테스트에서 세 API의 빈 본문 400을 확인한다. 실제 결과: 전체 C 테스트 및 Python 업로드 도구 테스트 통과.
+- socketpair 클라이언트의 shutdown은 서버가 먼저 종료한 경우 ENOTCONN을 허용한다. 응답 상태·본문·길이 검증은 유지한다.
+- 과거 수동 TCP 및 category3 기록의 빈 본문 200은 변경 전 정책의 결과다.

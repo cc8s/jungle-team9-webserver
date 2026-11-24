@@ -130,7 +130,7 @@
 
 - POST는 Content-Length 헤더가 없으면 본문 수신을 기다리지 않고 411 Length Required를 반환한다.
 - 헤더 누락과 명시적 0을 구분하도록 has_content_length를 보관한다. Content-Type은 기존 필드처럼 오프셋·길이로 보관한다.
-- 명시적인 Content-Length: 0은 허용한다. 존재하는 POST API 경로에서는 타입별 파서를 건너뛰고 200과 `{"ok":true,"data":null}`을 반환한다. 업로드 경로도 이 경우 파일을 만들지 않는다.
+- 명시적인 Content-Length: 0은 세 POST API 모두 400과 invalid_body로 거부한다. 경로 확인 후 Content-Type 검사·타입별 파서·업로드 저장 전에 반환한다. Content-Length 누락은 기존대로 411이다.
 - 잘못되거나 중복된 Content-Length는 400, Transfer-Encoding과 병용은 400, 단독 Transfer-Encoding은 기존대로 501이다. 이 충돌·문법 검증을 누락 길이 411보다 먼저 수행한다.
 - 본문 상한 1 MiB는 Base64와 JSON 메타데이터를 포함한 수신 바이트 전체에 적용한다. 디코딩 파일만의 1 MiB 제한이라는 뜻이 아니다.
 - 헤더 완료부터 본문 수신 전체 10초, 전송 진행 없는 5초, 연결당 첫 요청 후 종료 정책은 유지한다.

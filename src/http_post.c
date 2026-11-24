@@ -246,7 +246,7 @@ int post_prepare(const char *path, const unsigned char *body, size_t length,
     if (!post_is_route(path))
         return post_error(response, 404, "not_found", "Unknown POST path");
     if (!length)
-        return json_append(&response->body, "{\"ok\":true,\"data\":null}", 23);
+        return post_error(response, 400, "invalid_body", "Request body is required");
     int form = !strcmp(path, "/api/form");
     int error = content_type(type, type_length,
                              form ? "application/x-www-form-urlencoded" : "application/json");

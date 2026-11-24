@@ -152,7 +152,16 @@ int main(void)
     expect("/api/form", "name=hello+world&age=25", "application/x-www-form-urlencoded", 200);
     expect("/api/form", "name=a&name=b", "application/x-www-form-urlencoded", 400);
     expect("/unknown", "", "application/json", 404);
-    expect("/api/upload", "", NULL, 200);
+    const char *paths[] = {"/api/users", "/api/form", "/api/upload"};
+    const char *types[] = {NULL, "", "application/json", "application/x-www-form-urlencoded"};
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        for (size_t j = 0; j < sizeof(types) / sizeof(types[0]); j++) {
+            json_value *response = run(paths[i], "", types[j], 400);
+            const json_value *error = json_member(response, "error");
+            assert_text(json_member(error, "code"), (const unsigned char *)"invalid_body", 12);
+            json_free(response);
+        }
+    }
     expect("/api/upload", "{}", "multipart/form-data; boundary=x", 415);
 
     int original = open(".", O_RDONLY);

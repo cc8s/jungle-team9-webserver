@@ -153,7 +153,7 @@ main: accept → 기존 논블로킹 설정
       예약 API의 비POST → 405 + Allow: POST
       알 수 없는 POST 경로 → 404
       POST 예약 경로 → post_prepare
-        길이 0 → 200 + data:null
+        길이 0 → 400 + invalid_body (Content-Type 검사·파싱·저장 전 반환)
         Content-Type 검증 → 지원하지 않으면 415
         /api/users → JSON 파싱·객체 검사 → 결과 JSON 생성
         /api/form → 폼 파싱 → 결과 JSON 생성
