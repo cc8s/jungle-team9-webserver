@@ -194,3 +194,10 @@ make test BUILD=build/f1-host-sanitize TBIN=tests/bin/f1-host-sanitize \
 - test_json: 구분자 위치, 구분자만 있는 본문, = 없는 키, 명시적 빈 키, 첫 = 분리, 인코딩된 구분자 10종의 정확한 JSON을 검증한다. 빈 조각 사이 중복 키는 400, 빈 조각을 섞은 실제 필드 100/101개는 성공/413이다.
 - test_post: 구분자만 있는 본문 및 빈 조각+일반 필드 요청이 200인지 확인한다.
 - 실행 결과: `make tests/bin/test_json tests/bin/test_post` 후 두 실행 파일 모두 통과.
+
+## 폼 빈 키 거부 (2026-11-24)
+
+- 기존 빈 키 허용 정책을 변경한다. `=foo`, `=`, `a=1&=foo`, `&&=foo&&`, `a=1&=foo&b=2`는 400이며 부분 파싱 결과도 해제한다.
+- 빈 조각은 계속 무시하고, `foo`는 빈 값을 가진 정상 필드로 유지한다.
+- 검증: test_json에서 빈 키 5종과 정상 조각 9종, test_post에서 빈 키 요청 2종의 400을 확인한다.
+- 실행 결과: `make tests/bin/test_json tests/bin/test_post` 및 두 실행 파일 모두 통과.

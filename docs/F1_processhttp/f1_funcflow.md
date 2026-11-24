@@ -263,4 +263,4 @@ test_stability의 반복 요청은 socketpair → http_receive_request → http_
 
 - `/api/upload → upload`: 필수 문자열 타입 확인 후 content_type 길이가 0이면 400을 반환하며 저장하지 않는다.
 - `/api/form → form_parse → form_decode`: 키·값의 %XX 및 + 해석 후 바이트가 NUL이면 400을 반환한다. form_parse가 중간 객체를 해제하고 post_prepare가 invalid_body 응답을 만든다.
-- `form_parse`: &로 조각 경계를 찾고 빈 조각이면 즉시 건너뛴다. 비어 있지 않은 조각만 필드 수를 세고 첫 =로 분리한다. =가 없으면 전체를 키, 빈 문자열을 값으로 전달한다. 이후 form_decode와 중복 키 검사는 유지한다.
+- `form_parse`: &로 조각 경계를 찾고 빈 조각이면 즉시 건너뛴다. 비어 있지 않은 조각만 필드 수를 세고 첫 =로 분리한다. =가 없으면 전체를 키, 빈 문자열을 값으로 전달한다. 이후 form_decode로 키를 해석하고 길이가 0이면 400으로 중단한다. 값 디코딩과 중복 키 검사는 유지한다.

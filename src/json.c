@@ -515,6 +515,8 @@ int form_parse(const unsigned char *data, size_t length, json_value **out)
         }
         item->type = JSON_STRING;
         error = form_decode(data + start, equal - start, &item->key);
+        if (!error && !item->key.length)
+            error = 400;
         if (!error)
             error = form_decode(data + (equal < end ? equal + 1 : end),
                                 equal < end ? end - equal - 1 : 0, &item->text);

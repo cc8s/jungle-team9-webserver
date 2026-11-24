@@ -82,9 +82,9 @@ int main(void)
         expect(out.data, total == 10000 ? 0 : 413);
         free(out.data);
     }
-    const char *segments[] = {"a=1&", "&a=1", "&&a=1&&", "a=1&&b=2", "&", "&&", "foo", "=value", "a=b=c", "x=%26%3D"};
+    const char *segments[] = {"a=1&", "&a=1", "&&a=1&&", "a=1&&b=2", "&", "&&", "foo", "a=b=c", "x=%26%3D"};
     const char *expected[] = {"{\"a\":\"1\"}", "{\"a\":\"1\"}", "{\"a\":\"1\"}",
-        "{\"a\":\"1\",\"b\":\"2\"}", "{}", "{}", "{\"foo\":\"\"}", "{\"\":\"value\"}",
+        "{\"a\":\"1\",\"b\":\"2\"}", "{}", "{}", "{\"foo\":\"\"}",
         "{\"a\":\"b=c\"}", "{\"x\":\"&=\"}"};
     for (size_t i = 0; i < sizeof(segments) / sizeof(segments[0]); i++) {
         assert(form_parse((const unsigned char *)segments[i], strlen(segments[i]), &v) == 0);
@@ -93,6 +93,11 @@ int main(void)
         assert(out.length == strlen(expected[i]) && !memcmp(out.data, expected[i], out.length));
         json_free(v);
         free(out.data);
+    }
+    const char *empty_keys[] = {"=foo", "=", "a=1&=foo", "&&=foo&&", "a=1&=foo&b=2"};
+    for (size_t i = 0; i < sizeof(empty_keys) / sizeof(empty_keys[0]); i++) {
+        assert(form_parse((const unsigned char *)empty_keys[i], strlen(empty_keys[i]), &v) == 400);
+        assert(v == NULL);
     }
     assert(form_parse((const unsigned char *)"&a=1&&a=2&", 10, &v) == 400);
     const char *form = "name=%ED%99%8D%EA%B8%B8%EB%8F%99&note=a+b";
