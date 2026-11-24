@@ -1,221 +1,101 @@
 # F1. 테스트 케이스
 
-## 현재 검증 상태
+현재 테스트 코드와 기존 실행 기록을 한 표로 통합했다. **통과**는 실제 실행한 범위만 뜻하며, **부분 검증**과 **미실행**은 추가 검증이 필요하다. 이전 계획표의 일괄 미실행 표시는 폐기한다.
 
-A의 수신·파싱은 구현했다. 아래 계획표의 개별 결과는 하단 실제 검증 기록을 기준으로 한다. A/B와 헤더·본문·쓰기 타임아웃은 구현돼 있다. 각 기능 구현 커밋에서 실행 명령, 실제 결과, 미검증 항목을 갱신한다. 기존 smoke 테스트 통과를 HTTP 기능 검증으로 기록하지 않는다.
+자동 테스트는 macOS에서 `make test` 및 ASan/UBSan으로 실행해 통과했다. 가장 최근 전체 실행은 GET 소스 분리 작업의 `build/get-split-sanitize` 검사다. 이번 문서 재편에서는 테스트를 다시 실행하거나 코드를 변경하지 않았다. TCP/curl 항목은 POST 구현 당시 별도로 실행한 수동 검증 기록이다.
 
-## 단위별 검증 계획
-
-아래 단계 번호는 기존 테스트 목록의 식별자다. 1~4는 A(요청 파싱), 5~6은 B(응답 생성·쓰기)에 속한다. 7의 수신 기한은 A, 쓰기 기한은 B에서 검증한다. 구현 단위는 A/B 두 개다.
-
-| 단계 | 입력 또는 상황 | 기대 결과 | 실행 방법 | 결과 |
-|---|---|---|---|---|
-| 1 | 클라이언트가 바이트 전송 | read 반환값만큼 수신 데이터 확인 | 서버 실행 후 Python 소켓으로 전송 | 미실행 |
-| 1 | 클라이언트가 전송 방향 종료 | EOF를 구분하고 연결 정리 | Python shutdown(SHUT_WR) | 미실행 |
-| 2 | CRLF와 헤더 종료를 나눠 전송 | 경계가 완성될 때까지 누적 | Python 소켓의 여러 send 호출 | 미실행 |
-| 3 | 정상 GET 요청 라인 | 메서드·요청 대상·버전 추출 | 파서 단위 테스트 | 미실행 |
-| 3 | 부족하거나 잘못된 요청 라인 | 추가 수신 필요와 오류 구분 | 파서 단위 테스트 | 미실행 |
-| 4 | 헤더와 본문을 한 버퍼로 전달 | 본문 시작 위치와 길이 보존 | 파서 단위 테스트 | 미실행 |
-| 4 | Content-Length: 4, 본문 00 0D 0A 78 | NUL과 CRLF를 포함한 4바이트 처리 | 바이트 배열 단위 테스트 | 미실행 |
-| 4 | 본문 부족·초과, 후속 요청 포함 | 부족 시 대기, 현재 요청 소비 범위 구분 | 파서 단위 테스트 | 미실행 |
-| 4 | 음수·비숫자·오버플로우·중복 길이·Transfer-Encoding | 합의한 정책에 따른 거절 | 파서 단위 테스트 | 미실행 |
-| 5 | /css/main.css?v=1 | 쿼리 분리, 하위 경로 유지 | 경로 단위 테스트 및 임시 파일 | 미실행 |
-| 5 | 인코딩된 .., 잘못된 %XX, %00 | 경로 이탈과 비정상 인코딩 거절 | 경로 단위 테스트 | 미실행 |
-| 5 | 최종·중간 경로의 심볼릭 링크 | 접근 차단 | 임시 디렉토리와 심볼릭 링크 | 미실행 |
-| 5 | 파일 없음·권한 없음·디렉토리 | 합의한 오류 응답 | 임시 파일을 이용한 통합 테스트 | 미실행 |
-| 6 | HTML·JSON·PNG 파일 요청 | MIME, 본문 길이와 실제 바이트 일치 | curl 및 Python 소켓 | 미실행 |
-| 6 | 부분 쓰기·EINTR | 남은 바이트부터 전송, 중단 재시도 | I/O 제어 가능한 테스트 방식 합의 후 실행 | 미실행 |
-| 6 | 클라이언트 종료·전송 도중 파일 읽기 실패 | 새 500 없이 자원 정리 | 연결 종료 및 실패 재현 방식 합의 후 실행 | 미실행 |
-| 7 | 끝나지 않는 헤더·본문 | 각각 전체 기한 5초·10초 적용 | 시간 측정 통합 테스트 | 미실행 |
-| 7 | 응답 수신을 멈춘 클라이언트 | 쓰기 진행 없이 5초 경과 시 종료 | 큰 파일과 수신 중단 클라이언트 | 미실행 |
-| 공통 | 정상·오류 요청 반복 | FD·메모리 누적 없음 | 플랫폼에 맞는 자원 검사 | 미실행 |
-
-## A 실제 검증 결과
-
-실행: `make`, `make test`.
-
-`tests/test_http_request.c` 통과 항목:
-
-- 요청을 바이트마다 나눠 파서 호출: NEED_MORE 후 COMPLETE.
-- 헤더와 바이너리 본문(NUL·CRLF), 후속 바이트를 함께 전달: 본문 4바이트와 첫 요청 소비 범위 확인.
-- 요청 라인 필드의 오프셋·길이 확인.
-- Host 누락, 잘못된·중복·오버플로우 Content-Length 거절.
-- 요청 라인·헤더·본문 상한 초과와 지원하지 않는 버전 검출.
-- Transfer-Encoding 단독과 Content-Length 병용 구분.
-- socketpair로 5000바이트 본문 수신: 4 KiB 이후 확장과 필드 유효성 확인.
-- 불완전 요청 후 EOF 검출과 테스트 자원 해제.
-
-기존 main의 미사용 argc/argv 경고는 유지된다. EINTR 강제 발생, 읽기 오류 강제 주입, 최대 경계값 전체, 상세 Host 문법은 아직 검증하지 않았다. 타임아웃과 HTTP 오류 응답은 이번 검증 범위 밖이다.
-
-추가 검증: 별도 build/a-sanitize 디렉토리에서 `-fsanitize=address,undefined`로 같은 테스트를 실행했고 통과했다. Makefile은 변경하지 않았다.
-
-## 헤더 타임아웃 검증
-
-실행: `make test` 및 별도 ASan/UBSan 빌드의 같은 테스트.
-
-- 기존 파서·수신 테스트: 통과.
-- 아무 바이트도 보내지 않는 socketpair: 실제 5초 뒤 HTTP_HEADER_TIMEOUT 반환 확인.
-- 20ms 간격으로 부분 헤더를 보내는 스레드: 테스트용 200ms 절대 기한이 연장되지 않음을 확인.
-- 이미 만료된 기한에 읽을 데이터가 있어도 HTTP_HEADER_TIMEOUT 반환 확인.
-- 기존 EOF 검출·기한 내 정상 요청 수신 테스트 유지.
-- poll의 EINTR 강제 발생은 미검증이다. 본문 10초 제한과 B의 408 응답은 미구현이다.
-
-## B 실제 검증 결과
-
-실행: make, make test, 별도 build/b-sanitize에서 ASan/UBSan을 켠 동일 테스트.
-
-`tests/test_http_response.c`에서 임시 www와 socketpair를 사용한다.
-
-- `/`의 index.html, 64 KiB 바이너리 PNG와 정확한 Content-Length·MIME·바이트 일치 확인.
-- 쿼리 분리와 % 디코딩, 없는 파일 404, 디렉토리 403 확인.
-- 인코딩된 .., NUL, 비정상 인코딩, 중간·최종 심볼릭 링크 차단 확인.
-- POST의 405와 Allow: GET 확인.
-- A 오류 400/408/413/414/431/500/501/505 변환 확인.
-- 작은 소켓 송신 버퍼와 읽지 않는 상대: 실제 진행 없는 5초 뒤 실패 및 소켓 모드 불변 확인.
-- 상대 연결 종료 후 전송 실패 반환 확인.
-- 테스트 임시 파일·디렉토리·FD 정리.
-
-EINTR 강제 발생, 파일 읽기 실패 강제 주입, FD 누수 계측, 타임아웃 갱신을 위한 느린 수신자 테스트, TCP 브라우저 검증은 미실행이다. 본문 수신 10초 제한은 A의 남은 작업이다.
-
-## 본문 정책 변경 검증
-
-기존 GET 본문 수신 테스트는 POST로 변경했다. 위의 GET 본문 대기 및 본문 타임아웃 미구현 기록은 당시 상태이며 현재 정책은 아래와 같다.
-
-- GET에 Content-Length: 100만 보내고 본문을 보내지 않아도 즉시 완료하며 consumed는 헤더 길이임을 확인.
-- POST 바이너리 본문, 4 KiB 버퍼 확장과 전체 본문 소비 범위 테스트 유지.
-- POST 헤더와 본문 일부 전송 후 2초마다 바이트를 추가해도 전체 10초 뒤 HTTP_BODY_TIMEOUT 반환 확인.
-- 기존 헤더 5초 테스트 유지, B에서 HTTP_BODY_TIMEOUT → 408 매핑 확인.
-- 실행: make, make test, 별도 ASan/UBSan 빌드의 동일 테스트.
-
-## 논블로킹 계약 변경의 검증 계획
-
-- 테스트에서 A/B에 전달하는 socketpair FD를 O_NONBLOCK으로 설정한다. 상대 FD는 기존 방식으로 둔다.
-- 16 KiB 전송 시도보다 작은 송신 버퍼로도 전체 바이너리 응답 바이트가 일치해야 한다.
-- 읽지 않는 상대에 대해 1 KiB 우회 없이 5초 쓰기 타임아웃이 발생해야 한다.
-- A의 헤더 5초·POST 본문 10초 고정 기한 테스트를 논블로킹 FD로 재실행한다.
-- A/B 호출 후 연결 FD가 논블로킹을 유지하는지 확인한다.
-- 위의 소켓 모드 불변·본문 미구현 기록은 당시 구현의 검증 이력이다. 변경 후 실제 결과는 별도로 기록한다.
-
-## 논블로킹 계약 적용 결과
-
-- make 및 make test 통과. 별도 build/nonblocking-sanitize에서 ASan/UBSan 테스트 통과.
-- 4 KiB SO_SNDBUF를 설정한 논블로킹 socketpair에서 16 KiB 청크를 사용한 64 KiB 바이너리 응답의 전체 바이트 일치 확인.
-- 1 KiB 송신 제한 없이 읽지 않는 상대에 대해 실제 5초 쓰기 타임아웃 및 O_NONBLOCK 유지 확인.
-- 논블로킹 수신 FD에서 헤더 5초, POST 본문 10초, GET 본문 생략 테스트 통과.
-- 실행 환경은 macOS이며 Linux 및 실제 TCP 느린 수신자 검증은 이번에 수행하지 않았다.
-
-## 2-1〜2-3 보완 검증
-
-- 요청 라인 8 KiB 및 헤더 32 KiB의 직전·정확한 경계·초과 크기 검증.
-- 크기 초과와 문법 오류가 함께 있으면 문법 오류 우선 확인. 비정상 메서드와 헤더 이름 포함.
-- 헤더 누적량이 32 KiB를 넘지 않는지 실제 socketpair 수신으로 확인.
-- SIZE_MAX offset/length, 잘못된 method/host 범위, 빈 target, NULL 요청·버퍼와 오류 응답의 버퍼 생략 검증.
-- 유효 버퍼 안의 URI 길이 8 KiB 및 초과 입력에 414 확인.
-- 기존 바이너리 본문·부분 수신·EOF·헤더/본문/쓰기 기한 회귀 테스트 유지.
-- make test와 별도 build/bounds-sanitize의 ASan/UBSan 테스트를 실행했고 모두 통과했다. recv 성공 직후 기한이 넘어가는 스케줄링 상황과 내부 decode_path의 작은 출력 버퍼 직접 호출은 자동 재현하지 않았다.
-
-## POST 확장 검증 계획 — 구현 검증 결과는 하단 참조
-
-현재 테스트의 POST → 405는 기존 구현에 대한 검증이다. 아래 항목은 POST 기능의 전체 검증 계획이다. 실제 실행 여부는 하단 기록을 기준으로 하며 계획표 전체를 통과 결과로 간주하지 않는다.
-
-| 항목 | 입력·상황 | 기대 결과 | 방법 |
+| 카테고리 | 테스트 코드 | 설명 | 통과여부 |
 |---|---|---|---|
-| 길이 필수 | POST, Content-Length 누락 | 본문을 기다리지 않고 411 | 파서·socketpair·curl |
-| 길이 0 | 예약 API에 명시적 Content-Length: 0 | 200, data:null, 업로드 파일 없음 | 통합 테스트 |
-| 길이 검증 | 음수·비숫자·중복·오버플로우, 전송 코딩 충돌 | 400, 기존 전송 코딩 단독은 501 | 파서 회귀 |
-| 타입 분기 | 양수 본문의 타입 누락·경로와 다른 타입·multipart | 415 JSON 오류 | API 통합 |
-| 사용자 JSON | 홍길동·25·배열·중첩 address 예시 객체 | 200 JSON, 값과 타입 보존 | JSON 단위·curl |
-| JSON 문법 | 잘못된 이스케이프·숫자·괄호·후행 데이터 | 400 | JSON 단위 |
-| JSON 중복 키 | 같은 키 및 이스케이프로 같은 키 | 400 | JSON 단위 |
-| JSON 깊이 | 최상위 1 기준 16단계·17단계 | 16 허용, 17은 413 | 경계 단위 |
-| 객체 크기 | 필드 100개·101개 | 100 허용, 101은 413 | 경계 단위 |
-| 배열 크기 | 원소 1,000개·1,001개 | 1,000 허용, 1,001은 413 | 경계 단위 |
-| 전체 값 수 | 컨테이너 포함 10,000개·10,001개 | 10,000 허용, 초과 413 | 경계 단위 |
-| URL 인코딩 폼 | key=value, %XX, +, 한글 UTF-8 | 200 JSON, 정확한 디코딩 | 폼 단위·curl |
-| 폼 필드 제한 | 100개·101개 | 100 허용, 101은 413 | 폼 단위 |
-| API 라우팅 | GET /api/users, POST /없는경로 | 각각 405 + Allow: POST, 404 | API 통합 |
-| 경로 전처리 | 쿼리·인코딩된 예약 API 경로 | 전처리 후 같은 API 분기 | API 통합 |
-| 정상 업로드 | 파일을 Base64 JSON으로 전송 | 201, 식별자·원본 파일명·디코딩 크기 반환 | Python 인코딩 + curl |
-| 바이트 보존 | NUL·CRLF·0x00~0xFF 포함 원본 | 저장 파일과 원본 완전 일치 | bytes 비교·SHA-256 |
-| 메타데이터 분리 | filename·content_type과 실제 내용이 다름 | 형식 변환 없이 원본 바이트 보존 | 파일 비교 |
-| 경로 입력 | filename에 ../·절대 경로·기존 파일명 | 저장 경로로 사용하지 않음, 저장 루트 밖 변경 없음 | 임시 디렉토리 |
-| 고유 이름 | 동일 원본 파일명으로 반복 업로드 | 별도 서버 식별자로 저장, 덮어쓰기 없음 | 파일 목록·내용 비교 |
-| 잘못된 업로드 | 필수 필드 누락·타입 오류·잘못된 Base64 | 400, 불완전 파일 없음 | 단위·통합 |
-| 수신 본문 상한 | Base64와 메타데이터 포함 1 MiB 및 초과 | 상한 이내 처리, 초과 413 | 요청 바이트 길이 기준 |
-| 본문 기한 | POST를 조금씩 보내며 10초 초과 | 기한 연장 없이 408 | 기존 기한 테스트 확장 |
-| 파일 실패 | 생성·쓰기 실패 또는 부분 쓰기 후 오류 | 적절한 오류, 자신의 불완전 파일·FD 정리 | 실패 주입 |
-| 비공개 저장 | 저장 파일을 GET 정적 경로로 요청 | www와 별개이며 업로드 파일 직접 제공 안 함 | curl |
-| JSON 응답 | 한글·따옴표·역슬래시·제어 문자 포함 값 | 유효 JSON, Content-Length는 UTF-8 바이트 수 | JSON 파서로 재검증 |
-| 전송 실패 | 저장 성공 후 상대 연결 종료 | 추가 500 없음, 성공 저장 파일과 자원 정리 구분 | socketpair |
-| GET 회귀 | 기존 HTML·바이너리 파일과 오류 | 기존 상태·MIME·본문 유지 | 기존 테스트 전체 |
+| 수신·파싱 | [test_http_request.c](../../tests/test_http_request.c) · `main` | 요청을 한 바이트씩 늘려 전달해 CRLF·헤더 경계가 완성되기 전 NEED_MORE, 전체 POST 수신 후 COMPLETE 확인 | 통과 — 자동 |
+| 수신·파싱 | [test_http_request.c](../../tests/test_http_request.c) · `main` | 요청 라인의 메서드·URI 오프셋과 길이 추출 확인 | 통과 — 자동 |
+| 수신·파싱 | [test_http_request.c](../../tests/test_http_request.c) · `main` | 헤더·본문·후속 바이트가 함께 있을 때 첫 POST의 소비 범위만 계산 | 통과 — 자동 |
+| 수신·파싱 | [test_http_request.c](../../tests/test_http_request.c) · `main` | Content-Length: 4, 본문 00 0D 0A 78의 NUL·CRLF 포함 바이트 처리 | 통과 — 자동 |
+| 수신·파싱 | [test_http_request.c](../../tests/test_http_request.c) · `main` | socketpair로 5,000바이트 본문 수신, 초기 4 KiB 이후 버퍼 확장과 필드 유효성 확인 | 통과 — 자동 |
+| 수신·파싱 | [test_http_request.c](../../tests/test_http_request.c) · `main` | 불완전 요청 후 shutdown(SHUT_WR)의 EOF를 HTTP_INCOMPLETE_REQUEST로 구분 | 통과 — 자동 |
+| 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `error` | Host 누락, 비정상 행 구분, 지원하지 않는 HTTP 버전 검출 | 통과 — 자동 |
+| 요청 검증 | — | Host의 상세 문법과 모든 비정상 요청 라인 조합 | 미실행 |
+| 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `error` | Content-Length의 음수·비숫자·중복·정수 오버플로우 거절 | 통과 — 자동 |
+| 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `error` | Transfer-Encoding 단독과 Content-Length 병용 오류 구분 | 통과 — 자동 |
+| 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `error` | POST Content-Length 누락은 411용 오류, 중복 Content-Type은 400용 오류 | 통과 — 자동 |
+| 크기·우선순위 | [test_http_request.c](../../tests/test_http_request.c) · `test_size_priority` | 요청 라인 8 KiB·헤더 32 KiB의 직전·정확한 경계·초과 검증 | 통과 — 자동 |
+| 크기·우선순위 | [test_http_request.c](../../tests/test_http_request.c) · `test_size_priority` | 길이 초과와 잘못된 메서드·헤더 이름이 함께 있으면 문법 오류 우선 | 통과 — 자동 |
+| 크기·우선순위 | [test_http_request.c](../../tests/test_http_request.c) · `test_size_priority` | 실제 수신에서 헤더 누적량이 32 KiB를 넘지 않음 | 통과 — 자동 |
+| 크기·우선순위 | [test_http_request.c](../../tests/test_http_request.c) · `error` | 본문 상한 1 MiB 초과 거절. 정확히 1 MiB인 전체 POST·업로드 요청의 성공 경계는 미검증 | 부분 검증 |
+| 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_header_timeout` | 입력 없는 연결은 실제 5초 뒤 헤더 타임아웃 | 통과 — 자동 |
+| 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_header_timeout` | 부분 헤더를 20ms마다 보내도 테스트용 200ms 절대 기한이 연장되지 않음 | 통과 — 자동 |
+| 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_header_timeout` | 이미 기한이 만료됐으면 읽을 데이터가 있어도 타임아웃 | 통과 — 자동 |
+| 본문 정책 | [test_http_request.c](../../tests/test_http_request.c) · `test_body_policy` | GET은 Content-Length가 있어도 본문 없이 헤더만으로 완료 | 통과 — 자동 |
+| 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_body_policy` | POST 본문을 2초마다 추가해도 헤더 완료부터 전체 10초 뒤 타임아웃 | 통과 — 자동 |
+| 수신 기한 | — | recv 성공 직후 기한이 넘어가는 스케줄링 상황의 결정적 재현 | 미실행 |
+| 응답 경계 | [test_http_response.c](../../tests/test_http_response.c) · `test_api_bounds` | SIZE_MAX 오프셋·길이, 잘못된 method/host 범위, 빈 URI, NULL 인자에 500 | 통과 — 자동 |
+| 응답 경계 | [test_http_response.c](../../tests/test_http_response.c) · `test_api_bounds` | 오류 응답은 수신 버퍼 없이도 생성, 유효 버퍼 안의 URI 8 KiB 이상은 414 | 통과 — 자동 |
+| 응답 경계 | — | 내부 decode_path에 작은 출력 버퍼를 직접 전달해 종료 문자·index.html 치환 경계 검증 | 미실행 |
+| GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `check` | `/`의 index.html과 64 KiB PNG 본문 바이트·Content-Length 일치 | 통과 — 자동 |
+| GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `check` | PNG MIME, 쿼리 제거와 퍼센트 디코딩 확인 | 통과 — 자동 |
+| GET 정적 파일 | — | HTML·CSS·JS·JSON·JPG·JPEG·미등록 확장자의 MIME 전체 매핑 검증 | 미실행 |
+| GET 정적 파일 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 기본 페이지 응답 확인 | 통과 — 수동 |
+| GET 정적 파일 | — | `/css/main.css?v=1` 같은 실제 하위 디렉토리 파일 서빙 | 미실행 |
+| GET 경로 보호 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 없는 파일 404, 디렉토리 403, 중간·최종 심볼릭 링크 403 | 통과 — 자동 |
+| GET 경로 보호 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 인코딩된 .., %00, 잘못된 %XX 차단 | 통과 — 자동 |
+| GET 경로 보호 | — | 실제 파일 권한 거부의 403, 정적 파일 루트 접근 실패의 500 | 미실행 |
+| 오류 응답 | [test_http_response.c](../../tests/test_http_response.c) · 상태 매핑 목록 | A 오류의 400/408/411/413/414/431/500/501/505 변환 | 통과 — 자동 |
+| 라우팅 | [test_http_response.c](../../tests/test_http_response.c) · `check` | GET /api/users는 405 + Allow: POST, POST /는 404 | 통과 — 자동 |
+| 라우팅 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 인코딩·쿼리가 있는 예약 API 경로, 알 수 없는 POST 경로 확인 | 통과 — 수동 |
+| 라우팅 | — | 모든 예약 API와 미지원 메서드 조합의 Allow 검증 | 미실행 |
+| 전송 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 4 KiB 송신 버퍼에서 16 KiB 청크 기반 바이너리 응답 전체 바이트 일치 | 통과 — 자동 |
+| 전송 | [test_http_response.c](../../tests/test_http_response.c) · `main` | 상대가 읽지 않으면 실제 5초 쓰기 타임아웃, O_NONBLOCK 유지 | 통과 — 자동 |
+| 전송 | [test_http_response.c](../../tests/test_http_response.c) · `main` | 상대 연결 종료 후 전송 실패 반환 | 통과 — 자동 |
+| 전송 | — | 느린 수신자에게 일부씩 전송할 때 쓰기 기한 갱신 확인 | 미실행 |
+| 전송 | — | poll/recv/send/read의 EINTR 및 I/O 오류 강제 주입, 전송 도중 파일 읽기 실패 | 미실행 |
+| JSON 파서 | [test_json.c](../../tests/test_json.c) | 객체·배열·숫자·불리언·null 및 한글을 해석·재직렬화, 큰 정수 원문 보존 | 통과 — 자동 |
+| JSON 파서 | [test_json.c](../../tests/test_json.c) | 문자열 NUL·surrogate pair 보존, 잘못된 UTF-8·고립 surrogate 거절 | 통과 — 자동 |
+| JSON 파서 | [test_json.c](../../tests/test_json.c) · `expect` | 잘못된 숫자·이스케이프·후행 데이터·후행 쉼표·빈 입력 400 | 통과 — 자동 |
+| JSON 파서 | [test_json.c](../../tests/test_json.c) · `expect` | 이스케이프 해석 후 동일한 JSON 키 중복 400 | 통과 — 자동 |
+| JSON 제한 | [test_json.c](../../tests/test_json.c) | 깊이 16/17, 객체 필드 100/101, 배열 원소 1,000/1,001, 전체 값 10,000/10,001 | 통과 — 자동 |
+| 폼 파서 | [test_json.c](../../tests/test_json.c) | %XX·+·한글·NUL 디코딩, 비정상 %XX 및 디코딩 후 중복 이름 400 | 통과 — 자동 |
+| 폼 제한 | [test_json.c](../../tests/test_json.c) | 폼 필드 100개 허용·101개 413 | 통과 — 자동 |
+| POST 처리 | [test_post.c](../../tests/test_post.c) · `run`/`expect` | /api/users 객체 결과, /api/form 키·값 결과를 JSON으로 재파싱 | 통과 — 자동 |
+| POST 처리 | [test_post.c](../../tests/test_post.c) · `expect` | 양수 본문의 타입 누락·미지원 타입·multipart·미지원 매개변수는 415, UTF-8 charset 허용 | 통과 — 자동 |
+| POST 처리 | [test_post.c](../../tests/test_post.c) · `expect` | 사용자 API의 배열·잘못된 JSON 400, 알 수 없는 경로 404 | 통과 — 자동 |
+| POST 처리 | [test_post.c](../../tests/test_post.c) · `expect` | /api/upload의 명시적 0길이 본문은 200, 파일 생성 없이 data:null | 통과 — 자동 |
+| POST 통합 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 한글·중첩 사용자 JSON, 폼, 411/415 및 0길이 요청 확인 | 통과 — 수동 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) | 기존 uploads_storage에서 201, 시각 기반 같은 ID의 .bin/.json 쌍 생성 | 통과 — 자동 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) | 디코딩된 NUL·CRLF·0xFF 바이트, 메타데이터 원본명·크기, 두 파일 권한 0400 확인 | 통과 — 자동 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) | ../와 한글이 포함된 원본명을 저장 경로로 쓰지 않고 서버 ID 사용 | 통과 — 자동 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) | 같은 원본명으로 재업로드 시 별도 ID 생성, 기존 파일 유지 | 통과 — 자동 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) | 디렉토리 누락 시 500, 서버 자동 생성 없음 | 통과 — 자동 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) | 디렉토리 쓰기 권한 거부 시 500. root로 실행하면 이 케이스는 생략 | 통과 — macOS 일반 사용자 |
+| 업로드 Base64 | [test_post.c](../../tests/test_post.c) | 일반 Base64와 필요한 패딩의 정상 디코딩, 잘못된 길이·패딩·pad bits·공백·줄바꿈·URL 알파벳 400 | 통과 — 자동 |
+| 업로드 Base64 | [test_post.c](../../tests/test_post.c) | 필수 필드 누락·잘못된 Base64 실패 후 산출물 수가 증가하지 않음 | 통과 — 자동 |
+| 업로드 도구 | [upload_fixture.py](../../tests/tools/upload_fixture.py) · 실제 curl 실행 | 한글 파일명과 25,603바이트 원본을 34,247바이트 JSON으로 전송, 원본 바이트·메타데이터·0400 확인 | 통과 — 수동 |
+| 업로드 도구 | [upload_fixture.py](../../tests/tools/upload_fixture.py) | 테스트 도구에 JSON 1 MiB 사전 검사는 있으나 상한 경계 입력으로 실제 실행하지 않음 | 미실행 |
+| 업로드 저장 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 0x00~0xFF 전체 바이트 포함 파일의 보존 및 잘못된 Base64의 파일 미생성 | 통과 — 수동 |
+| 업로드 저장 | — | 업로드 필드의 잘못된 JSON 타입·encoding 값 조합 | 미실행 |
+| 업로드 Base64 | — | 패딩이 불필요한 정상 Base64와 빈 data의 0바이트 파일 저장 | 미실행 |
+| JSON 응답 | [test_json.c](../../tests/test_json.c) + 수동 TCP 기록 | 한글·NUL 재이스케이프와 HTTP 본문 바이트 길이는 확인. 따옴표·역슬래시·전체 제어 문자 조합 및 POST HTTP Content-Type 전체 검증은 미실행 | 부분 검증 |
+| 업로드 저장 | — | 원본명·타입이 실제 파일 형식과 달라도 변환 없이 바이트 보존 | 미실행 |
+| 업로드 저장 | — | 절대 경로·기존 파일명·NUL 등 추가 메타데이터 조합 | 미실행 |
+| 업로드 저장 | — | 고정 시각·시계 변경·기존 ID 충돌을 주입해 충돌 재시도와 덮어쓰기 금지 확인 | 미실행 |
+| 업로드 저장 | — | .bin 성공 후 .json 생성·쓰기·close·fchmod 실패를 주입해 자신의 파일 쌍만 삭제 | 미실행 |
+| 업로드 저장 | — | 저장 성공 후 응답 전송 실패에도 정상 저장 파일 보존, 추가 500 없음 | 미실행 |
+| 업로드 공개 범위 | — | 저장 파일을 GET으로 요청해 www 밖의 파일이 제공되지 않음 확인 | 미실행 |
+| 자원·안정성 | 기존 전체 자동 테스트 + ASan/UBSan | 기존 수신·응답·JSON·POST 테스트에서 메모리 접근·정의되지 않은 동작 오류 없음, GET 분리 후 회귀 통과 | 통과 — macOS |
+| 자원·안정성 | — | 장기 반복 요청의 FD·메모리 누수 계측 및 LeakSanitizer 검사 | 미실행 |
+| 자원·안정성 | — | 프로세스 강제 종료 중 업로드 파일 쌍의 일관성·디스크 동기화 | 미실행 |
+| 플랫폼 | — | Linux 실행과 실제 TCP 느린 수신자 검증 | 미실행 |
+| 빌드 파이프라인 | [test_smoke.c](../../tests/test_smoke.c) | 테스트 실행 파이프라인 확인. HTTP 기능 검증으로 간주하지 않음 | 통과 — 자동 |
 
-### curl 수동 테스트 준비
-
-구현 후 준비할 파일은 사용자 객체 user.json, 폼 요청 데이터, 업로드 원본 파일, Python 인코딩으로 만든 upload.json이다. 아래 명령은 향후 사용 예시이며 현재 서버의 성공 동작을 의미하지 않는다.
-
-```bash
-curl -i http://localhost:8000/api/users \
-  -H 'Content-Type: application/json' --data-binary @user.json
-curl -i http://localhost:8000/api/form \
-  --data-urlencode 'name=홍길동' --data-urlencode 'age=25'
-curl -i http://localhost:8000/api/upload \
-  -H 'Content-Type: application/json' --data-binary @upload.json
-curl -i -X POST http://localhost:8000/api/users -H 'Content-Length: 0'
-```
-
-411은 Content-Length와 Transfer-Encoding을 모두 생략한 원시 POST 헤더로 검사한다. curl은 옵션에 따라 Content-Length: 0을 자동 추가할 수 있으므로 송신 헤더를 확인하거나 Python 소켓을 사용한다.
-
-### 이번 문서 작업의 확인
-
-이 절은 POST 구현 전 문서 작업의 이력이다. 현재 구현·검증 결과는 하단 POST 구현 실제 검증을 기준으로 한다.
-
-## 업로드 세부 정책 검증 계획 — 실행 여부는 하단 결과 참조
-
-| 항목 | 입력·상황 | 기대 결과 |
-|---|---|---|
-| 디렉토리 준비 | uploads_storage가 미리 존재 | 서버 자동 생성 없이 업로드 가능 |
-| 디렉토리 실패 | 업로드 시 디렉토리 누락·접근 불가 | 500, 서버가 자동 생성하지 않음 |
-| 파일 쌍 | 정상 업로드 | 동일 시각 기반 ID의 .bin과 .json 생성, 원본명·타입·크기 일치 |
-| 읽기 전용 | 저장 완료 파일 두 개의 stat | 각각 권한 비트 0400 |
-| 시각 충돌 | 같은 시각·시계 변경·기존 ID 파일 | 기존 내용 보존, 구체화한 충돌 정책에 따라 처리 |
-| 쌍 정리 | .bin 기록 후 .json 생성·쓰기 실패 | 이번 요청이 생성한 두 파일 정리, 500 |
-| 권한 실패 | 한 파일의 0400 변경 실패 | 저장 성공으로 응답하지 않음, 이번 파일 쌍 정리 |
-| 일반 Base64 | +와 /, 필요한 = 패딩 포함 | 정상 디코딩, 저장 바이트와 원본 일치 |
-| 패딩 | 패딩 필요 없는 입력·필요한 패딩이 있는 입력 | 각각 정상 처리 |
-| 비정상 Base64 | 필요한 패딩 누락·잘못된 위치, 공백·CRLF·-·_ | 400, 파일 쌍 생성 없음 |
-| UTF-8 표현 | 한글·유니코드 이스케이프·NUL 포함 문자열 | 디코딩된 바이트와 길이 보존, JSON 응답 시 재이스케이프 |
-| 중복 폼 | name=a&name=b, name=a&%6Eame=b | 디코딩 후 동일 필드명이므로 400 |
-
-이 표는 세부 정책 확정 당시의 검증 계획이다. 현재 실행 여부는 하단 실제 검증 기록을 기준으로 한다. 테스트 도구의 디렉토리 준비와 서버의 자동 생성 동작은 구분한다.
-
-## POST 구현 실제 검증
-
-- `make`, `make test`: JSON/form·POST 업로드 신규 테스트 및 기존 A/B 테스트 통과.
-- 별도 `build/post-sanitize`에서 `-fsanitize=address,undefined`를 켠 동일 테스트 통과. macOS의 기본 Makefile `make asan`에 있는 LeakSanitizer는 사용하지 않았다.
-- `tests/test_json.c`: 한글·NUL·surrogate pair, 잘못된 UTF-8/이스케이프/숫자, 이스케이프 동등 중복 키, 깊이16/17, 객체100/101, 배열1000/1001, 전체값10000/10001, 폼100/101과 중복 검증.
-- `tests/test_post.c`: 경로·Content-Type 분기, JSON 결과 재파싱, 0길이, 정상·비정상 Base64와 canonical pad bits, 원본 바이트 보존, 메타데이터, 파일0400, 별도 업로드 ID, 디렉토리 누락·권한거부500, 실패 후 산출물 수 확인.
-- 권한거부 테스트는 root 실행 시 우회 권한 때문에 생략하며 로그에 표시한다. 디렉토리 누락 실패 검증은 유지한다.
-- 기존 response 테스트에서 예약 API의405+Allow: POST, 알 수 없는 POST404,411 상태를 추가했다.
-- root 에이전트의 독립 TCP 검증으로 기존 GET, JSON/form 한글·중첩, URI 디코딩 라우팅,405/404/400/415/411/0길이, 업로드 .bin/.json 바이트·메타데이터0400·재전송 별도 저장·잘못된 Base64 산출물 없음 확인.
-- root 에이전트가 실제 upload_fixture.py + curl로 한글 파일명의 25,603바이트 원본을 34,247바이트 JSON으로 전송해 바이트·메타데이터·0400 자동 검증까지 통과했다.
-- Linux 실행, close/fchmod 강제 실패 주입, 결정적인 시각 충돌 주입, 프로세스 강제 종료 중 파일 쌍 일관성, 장기 FD/메모리 누수 계측은 미실행이다.
-
-### 업로드 테스트 도구
-
-서버를 프로젝트 루트에서 실행하고 기존 uploads_storage를 준비한다. 테스트용 디렉토리 생성은 운영 서버의 자동 생성 동작이 아니다.
+실행 방법:
 
 ```bash
-# 요청 JSON 생성만 수행
-python3 tests/tools/upload_fixture.py photo.png --output /tmp/upload.json --content-type image/png
+make test
+make test BUILD=build/get-split-sanitize TBIN=tests/bin/get-split-sanitize \
+  EXTRA_CFLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+  EXTRA_LDFLAGS='-fsanitize=address,undefined'
 
-# curl 실행 후 저장한 바이트·메타데이터·0400 검증
-python3 tests/tools/upload_fixture.py photo.png --url http://localhost:8000/api/upload --content-type image/png
+# 서버와 기존 uploads_storage를 준비한 뒤 실제 파일을 전송·검증
+python3 tests/tools/upload_fixture.py photo.png \
+  --url http://localhost:8000/api/upload --content-type image/png
 ```
 
-도구는 줄바꿈 없는 일반 Base64와 패딩을 생성하며 JSON 전체 1 MiB 상한을 먼저 검사한다. 서버는 파일 저장을 실제로 수행하므로 도구가 검증 후 업로드 파일을 자동 삭제하지 않는다.
-
-## GET 소스 분리 회귀 검증
-
-기존 응답 테스트를 그대로 사용해 정상 HTML·바이너리 PNG, 쿼리·디코딩, 403/404, 심볼릭 링크·경로 이탈 차단, 전송 5초 제한·연결 종료를 검증한다. POST/JSON/form 테스트도 함께 실행해 공통 전송 함수 변경의 영향을 확인한다.
-
-make, make test, 별도 build/get-split-sanitize의 ASan/UBSan 전체 테스트를 실행했고 모두 통과했다. 기능 추가가 아닌 모듈 분리이므로 기존 테스트를 재사용했다.
+macOS 검증에서는 Makefile의 `make asan`에 포함된 LeakSanitizer를 사용하지 않았다. 업로드 도구는 실제 저장을 수행하며 검증 후 파일을 자동 삭제하지 않는다. 과거 수동 TCP 검증 스크립트는 저장소에 없으므로 자동 회귀 테스트와 구분한다.
