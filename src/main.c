@@ -1,5 +1,6 @@
 #include "http_request.h"
 #include "http_response.h"
+#include "http_connection.h"
 #include <sys/types.h>
 #include <sys/socket.h> // socket, bind, listen, accept
 #include <netinet/in.h> // sockaddr_in, INADDR_ANY, htons
@@ -77,7 +78,6 @@ int main(int argc, char **argv){
             close(conn_fd);
             continue;
         }
-        int64_t header_deadline = accepted_at + HTTP_HEADER_TIMEOUT_MS;
 
         // 리스닝 소켓은 유지하고, 이 연결의 I/O만 논블로킹으로 처리한다.
         int flags = fcntl(conn_fd, F_GETFL);
@@ -87,23 +87,8 @@ int main(int argc, char **argv){
             continue;
         }
 
-        // A: 요청 수신·파싱. B에서 사용할 때까지 buffer를 유지한다.
-        http_buffer buffer = {0};
-        http_request request = {0};
-        if (http_receive_request(conn_fd, &buffer, &request, header_deadline) == HTTP_COMPLETE) {
-            printf("request: %.*s %.*s (%zu bytes)\n",
-                   (int)request.method.length, buffer.data + request.method.offset,
-                   (int)request.target.length, buffer.data + request.target.offset,
-                   request.consumed);
-        } else {
-            fprintf(stderr, "request error: %d\n", request.error);
-        }
-        // B: 파싱 결과로 응답 생성·쓰기. 실패하면 추가 응답 없이 정리한다.
-        if (http_send_response(conn_fd, &buffer, &request) < 0)
-            fprintf(stderr, "response send failed\n");
-        free(buffer.data);
-        
-        // 이 처리가 끝난 뒤에만 다음 연결을 accept한다.
+        // 연결 안에서 요청을 순서대로 재사용 처리한 뒤 다음 accept로 이동한다.
+        handle_connection(conn_fd, accepted_at);
 
         close(conn_fd);
     }

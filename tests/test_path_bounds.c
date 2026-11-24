@@ -1,5 +1,6 @@
 /* Compile the real private decoder here without exporting a production test API. */
 #define http_send_all bounds_send_all
+#define http_respond bounds_respond
 #define http_send_response bounds_send_response
 #include "../src/http_response.c"
 #include <assert.h>

@@ -23,7 +23,7 @@ typedef enum {
 typedef struct {
     http_field method, target, version, host, connection, content_type;
     size_t header_length, content_length, consumed;
-    int headers_complete, has_content_length;
+    int headers_complete, has_content_length, connection_close;
     http_request_error error;
 } http_request;
 

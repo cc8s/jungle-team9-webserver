@@ -95,6 +95,7 @@ int fault_send_all(int fd, const void *data, size_t length, int64_t *deadline);
 #define http_parse_request fault_parse_request
 #define http_receive_request fault_receive_request
 #define http_send_all fault_send_all
+#define http_respond fault_respond
 #define http_send_response fault_send_response
 #define get_prepare fault_get_prepare
 #define get_send_body fault_get_send_body

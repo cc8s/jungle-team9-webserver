@@ -79,6 +79,7 @@ static ssize_t controlled_send(int fd, const void *data, size_t length, int flag
 #define http_parse_request timing_parse_request
 #define http_receive_request timing_receive_request
 #define http_send_all timing_send_all
+#define http_respond timing_respond
 #define http_send_response timing_send_response
 #include "../src/http_request.c"
 #include "../src/http_response.c"

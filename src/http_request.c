@@ -112,6 +112,20 @@ static http_request_error header_size_error(size_t line_end, size_t header_end,
     return HTTP_NO_ERROR;
 }
 
+static int has_close_token(const unsigned char *data, size_t length)
+{
+    for (size_t start = 0; start < length;) {
+        size_t end = start;
+        while (end < length && data[end] != ',') end++;
+        size_t first = start, last = end;
+        while (first < last && (data[first] == ' ' || data[first] == '\t')) first++;
+        while (last > first && (data[last-1] == ' ' || data[last-1] == '\t')) last--;
+        if (last-first == 5 && !strncasecmp((const char *)data+first, "close", 5)) return 1;
+        start = end + 1;
+    }
+    return 0;
+}
+
 http_parse_result http_parse_request(const unsigned char *data, size_t length,
                                      http_request *r)
 {
@@ -191,6 +205,7 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
                 r->content_type = field;
             } else if (header_is(data, start, colon-start, "Connection")) {
                 r->connection = field;
+                r->connection_close |= has_close_token(data + value, field.length);
             }
             start = end + 2;
         }
