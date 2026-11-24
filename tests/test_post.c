@@ -23,8 +23,125 @@ static void expect(const char *path, const char *body, const char *type, int sta
 {
     json_free(run(path, body, type, status));
 }
+static size_t upload_file_count(void)
+{
+    DIR *directory = opendir("uploads_storage");
+    assert(directory);
+    size_t count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory)))
+        if (entry->d_name[0] != '.') count++;
+    assert(closedir(directory) == 0);
+    return count;
+}
+
+static void assert_text(const json_value *value, const unsigned char *bytes, size_t length)
+{
+    assert(value && value->type == JSON_STRING && value->text.length == length);
+    assert(!memcmp(value->text.data, bytes, length));
+}
+
+static void stored_upload(const char *body, const unsigned char *bytes, size_t length,
+                          const unsigned char *filename, size_t filename_length,
+                          const unsigned char *type, size_t type_length)
+{
+    size_t before = upload_file_count();
+    json_value *response = run("/api/upload", body, "application/json", 201);
+    const json_value *data = json_member(response, "data");
+    const json_value *id = json_member(data, "id");
+    assert(id && id->text.length < 100);
+    assert_text(json_member(data, "filename"), filename, filename_length);
+    char identifier[100], size[32];
+    memcpy(identifier, id->text.data, id->text.length);
+    identifier[id->text.length] = 0;
+    snprintf(size, sizeof(size), "%zu", length);
+    const json_value *reported = json_member(data, "size");
+    assert(reported && reported->type == JSON_NUMBER && reported->text.length == strlen(size));
+    assert(!memcmp(reported->text.data, size, strlen(size)));
+    json_free(response);
+    char bin[160], meta[160];
+    snprintf(bin, sizeof(bin), "uploads_storage/%s.bin", identifier);
+    snprintf(meta, sizeof(meta), "uploads_storage/%s.json", identifier);
+    struct stat st;
+    assert(stat(bin, &st) == 0 && st.st_size == (off_t)length && (st.st_mode & 0777) == 0400);
+    assert(stat(meta, &st) == 0 && (st.st_mode & 0777) == 0400);
+    unsigned char contents[2048];
+    int fd = open(bin, O_RDONLY);
+    assert(fd >= 0 && read(fd, contents, sizeof(contents)) == (ssize_t)length);
+    assert(!memcmp(contents, bytes, length) && close(fd) == 0);
+    fd = open(meta, O_RDONLY);
+    assert(fd >= 0);
+    ssize_t got = read(fd, contents, sizeof(contents));
+    assert(got > 0 && close(fd) == 0);
+    json_value *metadata = NULL;
+    assert(!json_parse(contents, (size_t)got, &metadata));
+    assert_text(json_member(metadata, "filename"), filename, filename_length);
+    assert_text(json_member(metadata, "content_type"), type, type_length);
+    reported = json_member(metadata, "size");
+    assert(reported && reported->type == JSON_NUMBER && reported->text.length == strlen(size));
+    assert(!memcmp(reported->text.data, size, strlen(size)));
+    assert_text(json_member(metadata, "id"), (unsigned char *)identifier, strlen(identifier));
+    json_free(metadata);
+    assert(upload_file_count() == before + 2);
+    assert(unlink(bin) == 0 && unlink(meta) == 0);
+    assert(upload_file_count() == before);
+}
+
+static void test_upload_inputs(void)
+{
+    int original = open(".", O_RDONLY);
+    char temp[] = "/tmp/post-inputs-XXXXXX";
+    assert(original >= 0 && mkdtemp(temp) && chdir(temp) == 0);
+    assert(mkdir("uploads_storage", 0700) == 0);
+    /* Every field must be a string; rejection must leave storage untouched. */
+    const char *wrong[] = {"null", "true", "123", "[]", "{}"};
+    for (size_t field = 0; field < 4; field++) {
+        for (size_t kind = 0; kind < sizeof(wrong)/sizeof(wrong[0]); kind++) {
+            const char *values[] = {"\"x\"", "\"image/png\"", "\"base64\"", "\"AAEC\""};
+            values[field] = wrong[kind];
+            char body[512];
+            snprintf(body, sizeof(body), "{\"filename\":%s,\"content_type\":%s,\"encoding\":%s,\"data\":%s}",
+                     values[0], values[1], values[2], values[3]);
+            expect("/api/upload", body, "application/json", 400);
+            assert(upload_file_count() == 0);
+        }
+    }
+    const char *encodings[] = {"", "BASE64", "base64url", "utf-8", "base64 ", "base64\\u0000", "base"};
+    for (size_t i = 0; i < sizeof(encodings)/sizeof(encodings[0]); i++) {
+        char body[512];
+        snprintf(body, sizeof(body), "{\"filename\":\"x\",\"content_type\":\"x\",\"encoding\":\"%s\",\"data\":\"AAEC\"}", encodings[i]);
+        expect("/api/upload", body, "application/json", 400);
+        assert(upload_file_count() == 0);
+    }
+    const unsigned char binary[] = {0, 1, 2};
+    stored_upload("{\"filename\":\"photo.jpg\",\"content_type\":\"image/png\",\"encoding\":\"base64\",\"data\":\"AAEC\"}",
+                  binary, sizeof(binary), (unsigned char *)"photo.jpg", 9, (unsigned char *)"image/png", 9);
+    /* Empty data is different from an HTTP body of length zero: it creates a pair. */
+    stored_upload("{\"filename\":\"empty\",\"content_type\":\"x\",\"encoding\":\"base64\",\"data\":\"\"}",
+                  binary, 0, (unsigned char *)"empty", 5, (unsigned char *)"x", 1);
+    stored_upload("{\"filename\":\"nul\\u0000name\",\"content_type\":\"x\\u0000y\",\"encoding\":\"base64\",\"data\":\"AAEC\"}",
+                  binary, sizeof(binary), (unsigned char *)"nul\0name", 8, (unsigned char *)"x\0y", 3);
+    /* Names referring to existing files must remain metadata, without overwriting them. */
+    int fd = open("uploads_storage/existing.bin", O_CREAT | O_EXCL | O_WRONLY, 0600);
+    assert(fd >= 0 && write(fd, "keep", 4) == 4 && close(fd) == 0);
+    stored_upload("{\"filename\":\"existing.bin\",\"content_type\":\"x\",\"encoding\":\"base64\",\"data\":\"AAEC\"}",
+                  binary, sizeof(binary), (unsigned char *)"existing.bin", 12, (unsigned char *)"x", 1);
+    char absolute[256], body[512];
+    snprintf(absolute, sizeof(absolute), "%s/uploads_storage/existing.bin", temp);
+    snprintf(body, sizeof(body), "{\"filename\":\"%s\",\"content_type\":\"x\",\"encoding\":\"base64\",\"data\":\"AAEC\"}", absolute);
+    stored_upload(body, binary, sizeof(binary), (unsigned char *)absolute, strlen(absolute), (unsigned char *)"x", 1);
+    char sentinel[8];
+    fd = open("uploads_storage/existing.bin", O_RDONLY);
+    assert(fd >= 0 && read(fd, sentinel, sizeof(sentinel)) == 4 && !memcmp(sentinel, "keep", 4));
+    assert(close(fd) == 0 && upload_file_count() == 1);
+    assert(unlink("uploads_storage/existing.bin") == 0 && rmdir("uploads_storage") == 0);
+    assert(fchdir(original) == 0 && close(original) == 0 && rmdir(temp) == 0);
+    puts("POST upload inputs: 27 invalid combinations and 5 byte/metadata storage cases passed");
+}
+
 int main(void)
 {
+    test_upload_inputs();
     expect("/api/users", "{\"name\":\"홍길동\",\"age\":25}", "application/json", 200);
     expect("/api/users", "{}", "Application/JSON; charset=\"UTF-8\"", 200);
     expect("/api/users", "{}", "application/json; charset=latin1", 415);
