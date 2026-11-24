@@ -2,7 +2,7 @@
 
 현재 테스트 코드와 기존 실행 기록을 한 표로 통합했다. **통과**는 실제 실행한 범위만 뜻하며, **부분 검증**과 **미실행**은 추가 검증이 필요하다. 이전 계획표의 일괄 미실행 표시는 폐기한다.
 
-자동 테스트는 macOS에서 `make test` 및 ASan/UBSan으로 실행해 통과했다. 가장 최근 전체 실행은 GET 소스 분리 작업의 `build/get-split-sanitize` 검사다. 이번 문서 재편에서는 테스트를 다시 실행하거나 코드를 변경하지 않았다. TCP/curl 항목은 POST 구현 당시 별도로 실행한 수동 검증 기록이다.
+자동 테스트는 macOS에서 `make test` 및 ASan/UBSan으로 실행해 통과했다. 2026-11-24 GET·라우팅 보강에서 `make test`와 `build/f1-get-routing-sanitize` 전체 검사를 실행했다. TCP/curl 항목은 POST 구현 당시 별도로 실행한 수동 검증 기록이다.
 
 | 카테고리 | 테스트 코드 | 설명 | 통과여부 |
 |---|---|---|---|
@@ -32,16 +32,16 @@
 | 응답 경계 | — | 내부 decode_path에 작은 출력 버퍼를 직접 전달해 종료 문자·index.html 치환 경계 검증 | 미실행 |
 | GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `check` | `/`의 index.html과 64 KiB PNG 본문 바이트·Content-Length 일치 | 통과 — 자동 |
 | GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `check` | PNG MIME, 쿼리 제거와 퍼센트 디코딩 확인 | 통과 — 자동 |
-| GET 정적 파일 | — | HTML·CSS·JS·JSON·JPG·JPEG·미등록 확장자의 MIME 전체 매핑 검증 | 미실행 |
+| GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `test_get_routes` | HTML·CSS·JS·JSON·PNG·JPG·JPEG·미등록 확장자 및 대문자 CSS의 MIME·본문 바이트 검증 | 통과 — 자동 |
 | GET 정적 파일 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 기본 페이지 응답 확인 | 통과 — 수동 |
-| GET 정적 파일 | — | `/css/main.css?v=1` 같은 실제 하위 디렉토리 파일 서빙 | 미실행 |
+| GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `test_get_routes` | `/css/main.css?v=1` 실제 하위 디렉토리 파일의 MIME·본문·길이 검증 | 통과 — 자동 |
 | GET 경로 보호 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 없는 파일 404, 디렉토리 403, 중간·최종 심볼릭 링크 403 | 통과 — 자동 |
 | GET 경로 보호 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 인코딩된 .., %00, 잘못된 %XX 차단 | 통과 — 자동 |
 | GET 경로 보호 | — | 실제 파일 권한 거부의 403, 정적 파일 루트 접근 실패의 500 | 미실행 |
 | 오류 응답 | [test_http_response.c](../../tests/test_http_response.c) · 상태 매핑 목록 | A 오류의 400/408/411/413/414/431/500/501/505 변환 | 통과 — 자동 |
 | 라우팅 | [test_http_response.c](../../tests/test_http_response.c) · `check` | GET /api/users는 405 + Allow: POST, POST /는 404 | 통과 — 자동 |
 | 라우팅 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 인코딩·쿼리가 있는 예약 API 경로, 알 수 없는 POST 경로 확인 | 통과 — 수동 |
-| 라우팅 | — | 모든 예약 API와 미지원 메서드 조합의 Allow 검증 | 미실행 |
+| 라우팅 | [test_http_response.c](../../tests/test_http_response.c) · `test_get_routes` | 예약 API 3종 × 메서드 9종 × 원문/인코딩+쿼리 경로에서 405·Allow: POST 검증 | 통과 — 자동 |
 | 전송 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 4 KiB 송신 버퍼에서 16 KiB 청크 기반 바이너리 응답 전체 바이트 일치 | 통과 — 자동 |
 | 전송 | [test_http_response.c](../../tests/test_http_response.c) · `main` | 상대가 읽지 않으면 실제 5초 쓰기 타임아웃, O_NONBLOCK 유지 | 통과 — 자동 |
 | 전송 | [test_http_response.c](../../tests/test_http_response.c) · `main` | 상대 연결 종료 후 전송 실패 반환 | 통과 — 자동 |
@@ -78,7 +78,7 @@
 | 업로드 저장 | — | 고정 시각·시계 변경·기존 ID 충돌을 주입해 충돌 재시도와 덮어쓰기 금지 확인 | 미실행 |
 | 업로드 저장 | — | .bin 성공 후 .json 생성·쓰기·close·fchmod 실패를 주입해 자신의 파일 쌍만 삭제 | 미실행 |
 | 업로드 저장 | — | 저장 성공 후 응답 전송 실패에도 정상 저장 파일 보존, 추가 500 없음 | 미실행 |
-| 업로드 공개 범위 | — | 저장 파일을 GET으로 요청해 www 밖의 파일이 제공되지 않음 확인 | 미실행 |
+| 업로드 공개 범위 | [test_http_response.c](../../tests/test_http_response.c) · `test_get_routes` | 실제 저장된 .bin/.json의 직접 GET 404, 원문·인코딩 상위 경로 및 심볼릭 링크 GET 403 | 통과 — 자동 |
 | 자원·안정성 | 기존 전체 자동 테스트 + ASan/UBSan | 기존 수신·응답·JSON·POST 테스트에서 메모리 접근·정의되지 않은 동작 오류 없음, GET 분리 후 회귀 통과 | 통과 — macOS |
 | 자원·안정성 | — | 장기 반복 요청의 FD·메모리 누수 계측 및 LeakSanitizer 검사 | 미실행 |
 | 자원·안정성 | — | 프로세스 강제 종료 중 업로드 파일 쌍의 일관성·디스크 동기화 | 미실행 |
@@ -99,3 +99,28 @@ python3 tests/tools/upload_fixture.py photo.png \
 ```
 
 macOS 검증에서는 Makefile의 `make asan`에 포함된 LeakSanitizer를 사용하지 않았다. 업로드 도구는 실제 저장을 수행하며 검증 후 파일을 자동 삭제하지 않는다. 과거 수동 TCP 검증 스크립트는 저장소에 없으므로 자동 회귀 테스트와 구분한다.
+
+## GET·라우팅 보강 검증 (2026-11-24)
+
+`test_get_routes`에 73개 요청 검증을 추가했다. 기존 테스트와 동일하게 임시 디렉토리와 socketpair를 사용한다. 실제 TCP 및 Linux 검증은 포함하지 않는다.
+
+| 입력·범위 | 기대 결과 | 실제 결과 |
+|---|---|---|
+| html/css/js/json/png/jpg/jpeg/unknown/CSS 파일 9종, NUL·CRLF·0xFF 포함 5바이트 본문 | 200, 설계된 MIME, 원본 바이트와 Content-Length 일치 | 통과 |
+| `/css/main.css?v=1` | 200, text/css, 하위 디렉토리 파일 바이트 일치 | 통과 |
+| users/form/upload × GET/HEAD/PUT/PATCH/DELETE/OPTIONS/TRACE/CONNECT/CUSTOM × 원문 및 `/%61pi/…?v=1` 경로 (54개) | 405, application/json, Allow: POST 한 번 | 통과 |
+| PUT /index.html | 405, Allow: GET | 통과 |
+| post_prepare로 실제 생성한 .bin/.json × 직접 URL·상위 경로·인코딩 상위 경로·www 안의 저장소 심볼릭 링크 (8개) | 직접 URL 404, 나머지 403; 저장 파일 미제공 | 통과 |
+
+업로드 산출물은 테스트 전용 임시 디렉토리에 생성하고 검증 후 삭제한다. 실행 흐름은 `http_parse_request → http_send_response`이며, 업로드 준비만 `post_prepare`를 직접 호출한다. CONNECT도 기존 파서가 받는 origin-form 경로로 라우팅을 검사하며 CONNECT authority-form 문법은 이번 검증 범위가 아니다.
+
+실행 명령:
+
+```bash
+make test
+make test BUILD=build/f1-get-routing-sanitize TBIN=tests/bin/f1-get-routing-sanitize \
+  EXTRA_CFLAGS='-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer' \
+  EXTRA_LDFLAGS='-fsanitize=address,undefined'
+```
+
+두 실행 모두 HTTP request/response, JSON/form, POST, smoke 전체 통과. ASan/UBSan 오류 없음. LeakSanitizer는 포함하지 않았다.

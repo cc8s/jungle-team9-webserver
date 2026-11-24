@@ -1,4 +1,6 @@
 #include "http_response.h"
+#include "http_post.h"
+#include <dirent.h>
 #include <assert.h>
 #include <stdint.h>
 #include <fcntl.h>
@@ -31,8 +33,9 @@ static void *respond(void *argument)
     return NULL;
 }
 
-static void check(const char *method, const char *target, int expected,
-                  const unsigned char *body, size_t body_length)
+static void check_headers(const char *method, const char *target, int expected,
+                          const unsigned char *body, size_t body_length,
+                          const char *mime, const char *allow)
 {
     char wire[1024];
     int n = snprintf(wire, sizeof(wire), "%s %s HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n", method, target);
@@ -68,12 +71,106 @@ static void check(const char *method, const char *target, int expected,
     char *length_header = strstr((char *)output, "Content-Length: ");
     assert(length_header && strstr((char *)output, "Connection: close\r\n"));
     assert(strtoull(length_header + 16, NULL, 10) == used-header_length);
-    if (expected == 405) assert(strstr((char *)output, strstr(target,"/api/") ? "Allow: POST\r\n" : "Allow: GET\r\n"));
+    if (mime) {
+        char header[128];
+        assert(snprintf(header, sizeof(header), "Content-Type: %s\r\n", mime) > 0);
+        char *found = strstr((char *)output, header);
+        assert(found && found < end);
+    }
+    if (allow) {
+        char header[64];
+        assert(snprintf(header, sizeof(header), "Allow: %s\r\n", allow) > 0);
+        char *found = strstr((char *)output, header);
+        assert(found && found < end);
+        assert(!strstr(found + strlen(header), "Allow: "));
+    }
     if (expected == 200) {
         assert(used-header_length == body_length);
         assert(!memcmp(output+header_length, body, body_length));
         if (strstr(target, ".png")) assert(strstr((char *)output, "Content-Type: image/png\r\n"));
     }
+}
+
+static void check(const char *method, const char *target, int expected,
+                  const unsigned char *body, size_t body_length)
+{
+    check_headers(method, target, expected, body, body_length, NULL,
+                  expected == 405 ? "POST" : NULL);
+}
+
+static void fixture(const char *path, const unsigned char *body, size_t length)
+{
+    int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    assert(fd >= 0 && write(fd, body, length) == (ssize_t)length);
+    assert(close(fd) == 0);
+}
+
+static void test_get_routes(void)
+{
+    const struct { const char *extension, *mime; } types[] = {
+        {"html", "text/html"}, {"css", "text/css"}, {"js", "text/javascript"},
+        {"json", "application/json"}, {"png", "image/png"},
+        {"jpg", "image/jpeg"}, {"jpeg", "image/jpeg"},
+        {"unknown", "application/octet-stream"}, {"CSS", "text/css"}
+    };
+    const unsigned char body[] = {0, 'x', '\r', '\n', 255};
+    for (size_t i = 0; i < sizeof(types)/sizeof(types[0]); i++) {
+        char path[128], target[128];
+        snprintf(path, sizeof(path), "www/mime.%s", types[i].extension);
+        snprintf(target, sizeof(target), "/mime.%s", types[i].extension);
+        fixture(path, body, sizeof(body));
+        check_headers("GET", target, 200, body, sizeof(body), types[i].mime, NULL);
+        assert(unlink(path) == 0);
+    }
+    assert(mkdir("www/css", 0700) == 0);
+    fixture("www/css/main.css", body, sizeof(body));
+    check_headers("GET", "/css/main.css?v=1", 200, body, sizeof(body), "text/css", NULL);
+    assert(unlink("www/css/main.css") == 0 && rmdir("www/css") == 0);
+
+    const char *routes[] = {"/api/users", "/api/form", "/api/upload"};
+    const char *methods[] = {"GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS",
+                             "TRACE", "CONNECT", "CUSTOM"};
+    for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++) {
+        for (size_t j = 0; j < sizeof(methods)/sizeof(methods[0]); j++) {
+            check_headers(methods[j], routes[i], 405, NULL, 0, "application/json", "POST");
+            char encoded[128];
+            snprintf(encoded, sizeof(encoded), "/%%61pi/%s?v=1", routes[i] + 5);
+            check_headers(methods[j], encoded, 405, NULL, 0, "application/json", "POST");
+        }
+    }
+    check_headers("PUT", "/index.html", 405, NULL, 0, NULL, "GET");
+
+    /* Create real upload artifacts, then try direct, traversal and symlink URLs. */
+    assert(mkdir("uploads_storage", 0700) == 0);
+    const char upload[] = "{\"filename\":\"secret.bin\",\"content_type\":\"application/octet-stream\","
+                          "\"encoding\":\"base64\",\"data\":\"AA0K/w==\"}";
+    post_response response = {0};
+    assert(post_prepare("/api/upload", (const unsigned char *)upload, strlen(upload),
+                        (const unsigned char *)"application/json", 16, &response) == 0);
+    assert(response.status == 201);
+    free(response.body.data);
+    assert(symlink("../uploads_storage", "www/uploads-link") == 0);
+    DIR *directory = opendir("uploads_storage");
+    assert(directory);
+    struct dirent *entry;
+    size_t count = 0;
+    while ((entry = readdir(directory))) {
+        if (entry->d_name[0] == '.') continue;
+        char target[512], path[512];
+        snprintf(target, sizeof(target), "/uploads_storage/%s", entry->d_name);
+        check("GET", target, 404, NULL, 0);
+        snprintf(target, sizeof(target), "/../uploads_storage/%s", entry->d_name);
+        check("GET", target, 403, NULL, 0);
+        snprintf(target, sizeof(target), "/%%2e%%2e/uploads_storage/%s", entry->d_name);
+        check("GET", target, 403, NULL, 0);
+        snprintf(target, sizeof(target), "/uploads-link/%s", entry->d_name);
+        check("GET", target, 403, NULL, 0);
+        snprintf(path, sizeof(path), "uploads_storage/%s", entry->d_name);
+        assert(unlink(path) == 0);
+        count++;
+    }
+    assert(count == 2 && closedir(directory) == 0);
+    assert(unlink("www/uploads-link") == 0 && rmdir("uploads_storage") == 0);
 }
 
 static void api_error(const http_buffer *buffer, const http_request *request, int expected)
@@ -140,6 +237,8 @@ int main(void)
     check("GET", "/%z0", 400, NULL, 0);
     check("POST", "/", 404, NULL, 0);
     check("GET", "/api/users", 405, NULL, 0);
+
+    test_get_routes();
 
     /* Each A error is converted into the agreed HTTP status. */
     const struct { http_request_error error; int status; } cases[] = {

@@ -217,3 +217,7 @@ POST 확장에서 추가하는 상태는 201(저장 성공), 411(명시적 길�
 정적 파일 준비·읽기를 src/http_get.c로 옮긴다. get_prepare는 파일 열기·종류·크기·MIME을 준비하고, get_send_body는 파일을 16 KiB씩 읽어 공통 http_send_all로 전송한다. http_response.c는 경로·메서드 분기, 상태·헤더·오류 응답과 공통 전송 루프를 유지한다.
 
 성공한 get_prepare가 연 파일 FD는 호출자가 소유한다. http_send_response는 헤더 또는 본문 전송이 실패해도 파일 FD를 닫는다. 경로 처리·www 루트·MIME·오류 코드·타임아웃 정책은 변경하지 않는다. post_prepare 및 JSON 응답 흐름도 유지한다.
+
+## GET·라우팅 테스트 보강 (2026-11-24)
+
+기존 정책 변경 없이 MIME 전체 매핑, 하위 디렉토리와 쿼리, 예약 API 3종의 미지원 메서드, 업로드 비공개 범위를 자동 검증한다. 미지원 메서드 표본은 GET·HEAD·PUT·PATCH·DELETE·OPTIONS·TRACE·CONNECT·CUSTOM이며 원문과 인코딩+쿼리 경로를 함께 검사한다. Host 상세 문법은 이번 범위에 포함하지 않으며 후속 합의 사항으로 유지한다.

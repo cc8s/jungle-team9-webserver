@@ -230,3 +230,9 @@ http_send_response (http_response.c)
 ```
 
 get_response는 열린 파일 FD, MIME, 본문 길이를 전달한다. get_prepare의 path는 검증된 경로이며 내부 탐색에서 수정될 수 있다. get_send_body는 파일 FD를 닫지 않고, 공통 호출자가 성공·실패 모두 정리한다. 공통 전송 루프는 기존 send_all에서 http_send_all로 이름을 바꾸고 GET 모듈에서도 호출할 수 있게 했다.
+
+## GET·라우팅 보강 테스트 흐름 (2026-11-24)
+
+`main → test_get_routes → check_headers` 순서로 실행한다. check_headers는 요청 문자열을 http_parse_request로 파싱한 뒤, socketpair의 서버 FD를 응답 스레드에 전달한다. 응답 스레드는 http_send_response를 실행하고 FD를 닫는다. 수신 측은 EOF까지 읽고 상태·Content-Length·본문 바이트·지정한 MIME과 Allow를 검증한다.
+
+MIME·하위 경로 요청은 get_prepare → get_mime_type/open_static → get_send_body로 흐른다. 예약 API의 비POST 메서드는 경로 디코딩 후 post_is_route에서 JSON 405와 Allow: POST로 분기한다. 업로드 비공개 검증은 post_prepare로 임시 저장소에 실제 파일 쌍을 만들고 GET을 보낸다. www 안에 없는 직접 경로는 404, 상위 경로와 저장소 심볼릭 링크는 403이며, 테스트가 생성한 파일·링크·디렉토리를 정리한다.
