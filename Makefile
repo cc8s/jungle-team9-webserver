@@ -41,7 +41,7 @@ asan:
 	$(MAKE) test BUILD=build/asan TBIN=tests/bin/asan EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"
 
 run: $(BIN)
-	./$(BIN) $(PORT) $(ROOT)
+	./$(BIN) -p $(PORT) -r $(ROOT)
 
 clean:
 	rm -rf build tests/bin $(BIN)
