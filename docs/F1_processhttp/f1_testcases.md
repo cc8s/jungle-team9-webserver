@@ -20,7 +20,7 @@
 | 크기·우선순위 | [test_http_request.c](../../tests/test_http_request.c) · `test_size_priority` | 요청 라인 8 KiB·헤더 32 KiB의 직전·정확한 경계·초과 검증 | 통과 — 자동 |
 | 크기·우선순위 | [test_http_request.c](../../tests/test_http_request.c) · `test_size_priority` | 길이 초과와 잘못된 메서드·헤더 이름이 함께 있으면 문법 오류 우선 | 통과 — 자동 |
 | 크기·우선순위 | [test_http_request.c](../../tests/test_http_request.c) · `test_size_priority` | 실제 수신에서 헤더 누적량이 32 KiB를 넘지 않음 | 통과 — 자동 |
-| 크기·우선순위 | [test_http_request.c](../../tests/test_http_request.c) · `error` | 본문 상한 1 MiB 초과 거절. 정확히 1 MiB인 전체 POST·업로드 요청의 성공 경계는 미검증 | 부분 검증 |
+| 크기·우선순위 | [test_post_boundaries.c](../../tests/test_post_boundaries.c) · `test_body_boundaries` | 본문 상한 초과 413 및 정확히 1 MiB인 users·upload 전체 수신·성공 응답 검증 | 통과 — 자동 |
 | 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_header_timeout` | 입력 없는 연결은 실제 5초 뒤 헤더 타임아웃 | 통과 — 자동 |
 | 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_header_timeout` | 부분 헤더를 20ms마다 보내도 테스트용 200ms 절대 기한이 연장되지 않음 | 통과 — 자동 |
 | 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_header_timeout` | 이미 기한이 만료됐으면 읽을 데이터가 있어도 타임아웃 | 통과 — 자동 |
@@ -68,13 +68,13 @@
 | 업로드 Base64 | [test_post.c](../../tests/test_post.c) | 일반 Base64와 필요한 패딩의 정상 디코딩, 잘못된 길이·패딩·pad bits·공백·줄바꿈·URL 알파벳 400 | 통과 — 자동 |
 | 업로드 Base64 | [test_post.c](../../tests/test_post.c) | 필수 필드 누락·잘못된 Base64 실패 후 산출물 수가 증가하지 않음 | 통과 — 자동 |
 | 업로드 도구 | [upload_fixture.py](../../tests/tools/upload_fixture.py) · 실제 curl 실행 | 한글 파일명과 25,603바이트 원본을 34,247바이트 JSON으로 전송, 원본 바이트·메타데이터·0400 확인 | 통과 — 수동 |
-| 업로드 도구 | [upload_fixture.py](../../tests/tools/upload_fixture.py) | 테스트 도구에 JSON 1 MiB 사전 검사는 있으나 상한 경계 입력으로 실제 실행하지 않음 | 미실행 |
+| 업로드 도구 | [test_upload_fixture.py](../../tests/tools/test_upload_fixture.py) | 도구를 별도 프로세스로 실행해 JSON 1 MiB−1·정확 상한 생성 및 +1 사전 거절 검증 | 통과 — 자동 |
 | 업로드 저장 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 0x00~0xFF 전체 바이트 포함 파일의 보존 및 잘못된 Base64의 파일 미생성 | 통과 — 수동 |
-| 업로드 저장 | — | 업로드 필드의 잘못된 JSON 타입·encoding 값 조합 | 미실행 |
-| 업로드 Base64 | — | 패딩이 불필요한 정상 Base64와 빈 data의 0바이트 파일 저장 | 미실행 |
-| JSON 응답 | [test_json.c](../../tests/test_json.c) + 수동 TCP 기록 | 한글·NUL 재이스케이프와 HTTP 본문 바이트 길이는 확인. 따옴표·역슬래시·전체 제어 문자 조합 및 POST HTTP Content-Type 전체 검증은 미실행 | 부분 검증 |
-| 업로드 저장 | — | 원본명·타입이 실제 파일 형식과 달라도 변환 없이 바이트 보존 | 미실행 |
-| 업로드 저장 | — | 절대 경로·기존 파일명·NUL 등 추가 메타데이터 조합 | 미실행 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) · `test_upload_inputs` | 필드별 비문자열 타입 20개·encoding 오류 7개에 400 및 파일 미생성 | 통과 — 자동 |
+| 업로드 Base64 | [test_post.c](../../tests/test_post.c) · `test_upload_inputs` | 패딩 불필요 AAEC 디코딩 및 빈 data의 201·0바이트 파일 저장 | 통과 — 자동 |
+| JSON 응답 | [test_post_boundaries.c](../../tests/test_post_boundaries.c) | 따옴표·역슬래시·0x00~0x1F·한글 재파싱 보존, POST 성공·오류의 JSON Content-Type·실제 본문 길이 검증 | 통과 — 자동 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) · `test_upload_inputs` | photo.jpg·image/png 메타데이터와 다른 00 01 02 원본을 변환 없이 보존 | 통과 — 자동 |
+| 업로드 저장 | [test_post.c](../../tests/test_post.c) · `test_upload_inputs` | 절대 경로·기존 파일명·NUL 메타데이터 보존 및 기존 파일 불변 | 통과 — 자동 |
 | 업로드 저장 | — | 고정 시각·시계 변경·기존 ID 충돌을 주입해 충돌 재시도와 덮어쓰기 금지 확인 | 미실행 |
 | 업로드 저장 | — | .bin 성공 후 .json 생성·쓰기·close·fchmod 실패를 주입해 자신의 파일 쌍만 삭제 | 미실행 |
 | 업로드 저장 | — | 저장 성공 후 응답 전송 실패에도 정상 저장 파일 보존, 추가 500 없음 | 미실행 |
@@ -124,3 +124,11 @@ make test BUILD=build/f1-get-routing-sanitize TBIN=tests/bin/f1-get-routing-sani
 ```
 
 두 실행 모두 HTTP request/response, JSON/form, POST, smoke 전체 통과. ASan/UBSan 오류 없음. LeakSanitizer는 포함하지 않았다.
+
+## 카테고리 2·3 병렬 보강 (2026-11-24)
+
+- [카테고리 2 결과](f1_category2_results.md): 업로드 잘못된 입력 27개, 정상 저장·메타데이터·바이트 보존 5개.
+- [카테고리 3 결과](f1_category3_results.md): HTTP 교환 26회와 업로드 도구 경계 입력 3개. 정확 상한은 전체 본문을 실제 전송하며, +1은 Content-Length 헤더에서 거절한다. 오류 주입 11개는 상태·응답 헤더 매핑 검사다.
+- 두 작업의 일반 전체 및 ASan/UBSan 검사가 통과했다. 통합 후 `make test`에서도 신규 C 테스트와 Python 도구 경계 테스트를 실행해 통과했다. 실제 TCP·Linux·LeakSanitizer 검증은 제외한다.
+
+`make test`는 C 테스트 전체 실행 후 `python3 tests/tools/test_upload_fixture.py`를 실행한다. 상세 입력·기대·실제 결과와 전용 sanitizer 실행 명령은 위 결과 문서에 기록했다.

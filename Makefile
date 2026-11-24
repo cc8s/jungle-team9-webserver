@@ -36,6 +36,7 @@ $(TBIN)/%: tests/%.c $(LIB_OBJS) | $(TBIN)
 # 테스트 실행 파일을 하나씩 돌리고, 하나라도 실패하면 make 가 실패한다
 test: $(TESTS)
 	@for t in $(TESTS); do echo "== $$t"; ./$$t || exit 1; done
+	python3 tests/tools/test_upload_fixture.py
 
 asan:
 	$(MAKE) test BUILD=build/asan TBIN=tests/bin/asan EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"

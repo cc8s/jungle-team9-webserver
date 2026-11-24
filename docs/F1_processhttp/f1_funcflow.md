@@ -236,3 +236,9 @@ get_response는 열린 파일 FD, MIME, 본문 길이를 전달한다. get_prepa
 `main → test_get_routes → check_headers` 순서로 실행한다. check_headers는 요청 문자열을 http_parse_request로 파싱한 뒤, socketpair의 서버 FD를 응답 스레드에 전달한다. 응답 스레드는 http_send_response를 실행하고 FD를 닫는다. 수신 측은 EOF까지 읽고 상태·Content-Length·본문 바이트·지정한 MIME과 Allow를 검증한다.
 
 MIME·하위 경로 요청은 get_prepare → get_mime_type/open_static → get_send_body로 흐른다. 예약 API의 비POST 메서드는 경로 디코딩 후 post_is_route에서 JSON 405와 Allow: POST로 분기한다. 업로드 비공개 검증은 post_prepare로 임시 저장소에 실제 파일 쌍을 만들고 GET을 보낸다. www 안에 없는 직접 경로는 404, 상위 경로와 저장소 심볼릭 링크는 403이며, 테스트가 생성한 파일·링크·디렉토리를 정리한다.
+
+## 카테고리 2·3 보강 테스트 흐름 (2026-11-24)
+
+카테고리 2는 test_post의 test_upload_inputs → post_prepare → JSON 파싱·upload → Base64 디코딩·store_upload 흐름에서 입력 거절과 저장 파일·메타데이터를 검증한다. 카테고리 3은 test_post_boundaries의 exchange가 socketpair와 클라이언트 스레드로 http_receive_request → http_send_response를 실행하고 응답 JSON을 재파싱한다. 정확 1 MiB 본문은 전부 송수신하며, 초과 선언은 헤더에서 413으로 거절한다. 수신 오류 필드 주입은 실제 오류 발생 재현과 별도로 응답 매핑만 검증한다.
+
+make test는 신규 C 테스트를 자동 발견해 실행한 뒤 Python 도구 테스트를 실행한다. test_upload_fixture.py → upload_fixture.py subprocess 흐름에서 전체 JSON 크기 1 MiB−1·정확·+1의 생성·거절 결과를 검사한다. 모든 파일 생성은 전용 임시 디렉토리에서 수행하고 정리한다.
