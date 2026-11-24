@@ -173,6 +173,18 @@ static void test_get_routes(void)
     assert(unlink("www/uploads-link") == 0 && rmdir("uploads_storage") == 0);
 }
 
+static void test_file_access(void)
+{
+    fixture("www/denied", (const unsigned char *)"secret", 6);
+    assert(chmod("www/denied", 0000) == 0);
+    if (geteuid() != 0) check("GET", "/denied", 403, NULL, 0);
+    else puts("SKIP: file permission denial requires a non-root user");
+    assert(chmod("www/denied", 0600) == 0 && unlink("www/denied") == 0);
+    assert(rename("www", "www-hidden") == 0);
+    check("GET", "/", 500, NULL, 0);
+    assert(rename("www-hidden", "www") == 0);
+}
+
 static void api_error(const http_buffer *buffer, const http_request *request, int expected)
 {
     int pair[2]; assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
@@ -239,6 +251,7 @@ int main(void)
     check("GET", "/api/users", 405, NULL, 0);
 
     test_get_routes();
+    test_file_access();
 
     /* Each A error is converted into the agreed HTTP status. */
     const struct { http_request_error error; int status; } cases[] = {

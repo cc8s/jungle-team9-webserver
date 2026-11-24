@@ -18,8 +18,52 @@ static void nonblocking(int fd)
 static void error(const char *text, http_request_error expected)
 {
     http_request r = {0};
-    assert(http_parse_request((const unsigned char *)text, strlen(text), &r) == HTTP_PARSE_ERROR);
+    http_parse_result result = http_parse_request((const unsigned char *)text, strlen(text), &r);
+    if (result != HTTP_PARSE_ERROR || r.error != expected)
+        fprintf(stderr, "Unexpected parse result %d/error %d for: %s\n", result, r.error, text);
+    assert(result == HTTP_PARSE_ERROR);
     assert(r.error == expected);
+}
+
+static void test_host_policy(void)
+{
+    const char *good[] = {"localhost", "x", "Example.COM", "my-host.example.",
+        "127.0.0.1", "127.0.0.1:8080", "localhost:1", "x:65535", "x:00080",
+        "[::1]", "[::1]:8080", "[2001:db8::1]", "[::ffff:192.0.2.1]:443",
+        " \tlocalhost:8080\t "};
+    const char *bad[] = {"", " \t ", ".", "-x", "x-", "x..y", ".x", "x..",
+        "x_y", "한글", "%78", "x y", "x\ty", "x/y", "x\\y", "x@y", "x?y", "x#y", "x,y",
+        "x:", "x:abc", "x:0", "x:65536", "x:999999999999999999999", "x:-1", "x:+80",
+        "x:80:90", ":80", "999.1.1.1", "127.0.0", "[::1", "::1", "[]", "[xyz]",
+        "[1:2:3]", "[::1]x", "[::1]:", "[::1]:0", "[::1]:65536", "[fe80::1%lo0]", "[v1.x]"};
+    for (size_t i = 0; i < sizeof(good)/sizeof(good[0]); i++) {
+        char wire[256];
+        int n = snprintf(wire, sizeof(wire), "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", good[i]);
+        /* Reparse every prefix to exercise fragmented headers as well. */
+        for (int length = 0; length <= n; length++) {
+            http_request r = {0};
+            assert(http_parse_request((unsigned char *)wire, (size_t)length, &r) ==
+                   (length == n ? HTTP_COMPLETE : HTTP_NEED_MORE));
+        }
+    }
+    for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]); i++) {
+        char wire[256];
+        snprintf(wire, sizeof(wire), "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", bad[i]);
+        error(wire, HTTP_BAD_REQUEST);
+    }
+    error("GET / HTTP/1.1\r\nHost: x\r\nhOsT: x\r\n\r\n", HTTP_BAD_REQUEST);
+    const char *lines[] = {" / HTTP/1.1", "GET  / HTTP/1.1", "GET /  HTTP/1.1",
+        "GET / HTTP/1.1 ", "GET\t/ HTTP/1.1", "G(ET / HTTP/1.1", "GET HTTP/1.1",
+        "GET /", "GET http://x/ HTTP/1.1", "CONNECT x:80 HTTP/1.1", "OPTIONS * HTTP/1.1",
+        "GET /#fragment HTTP/1.1", "GET / HTTP/x.1", "GET / HTTP/1", "GET / HTTP/1.10"};
+    for (size_t i = 0; i < sizeof(lines)/sizeof(lines[0]); i++) {
+        char wire[256];
+        snprintf(wire, sizeof(wire), "%s\r\nHost: x\r\n\r\n", lines[i]);
+        error(wire, HTTP_BAD_REQUEST);
+    }
+    error("GET / HTTP/1.0\r\nHost: x\r\n\r\n", HTTP_UNSUPPORTED_VERSION);
+    error("GET / HTTP/2.0\r\nHost: x\r\n\r\n", HTTP_UNSUPPORTED_VERSION);
+    puts("Host policy: ASCII names, IP literals, port bounds and malformed request lines passed");
 }
 
 static void *trickle(void *argument)
@@ -181,6 +225,7 @@ static void test_size_priority(void)
 
 int main(void)
 {
+    test_host_policy();
     const unsigned char data[] = "POST /file?q=1 HTTP/1.1\r\nhOsT: localhost\r\nContent-Length: 4\r\n\r\n\0\r\nxNEXT";
     http_request r = {0};
     size_t request_length = sizeof(data)-1-4;

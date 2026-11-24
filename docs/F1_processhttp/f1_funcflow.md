@@ -242,3 +242,9 @@ MIME·하위 경로 요청은 get_prepare → get_mime_type/open_static → get_
 카테고리 2는 test_post의 test_upload_inputs → post_prepare → JSON 파싱·upload → Base64 디코딩·store_upload 흐름에서 입력 거절과 저장 파일·메타데이터를 검증한다. 카테고리 3은 test_post_boundaries의 exchange가 socketpair와 클라이언트 스레드로 http_receive_request → http_send_response를 실행하고 응답 JSON을 재파싱한다. 정확 1 MiB 본문은 전부 송수신하며, 초과 선언은 헤더에서 413으로 거절한다. 수신 오류 필드 주입은 실제 오류 발생 재현과 별도로 응답 매핑만 검증한다.
 
 make test는 신규 C 테스트를 자동 발견해 실행한 뒤 Python 도구 테스트를 실행한다. test_upload_fixture.py → upload_fixture.py subprocess 흐름에서 전체 JSON 크기 1 MiB−1·정확·+1의 생성·거절 결과를 검사한다. 모든 파일 생성은 전용 임시 디렉토리에서 수행하고 정리한다.
+
+## Host B안·카테고리 4 흐름 (2026-11-24)
+
+http_parse_request는 Host 헤더의 앞뒤 OWS를 제거한 후 valid_host를 호출한다. 대괄호 주소는 허용 문자 확인 → inet_pton(AF_INET6), 그 외는 라벨 문법 → 숫자·점 주소의 inet_pton(AF_INET) 순서로 검사한다. 이후 선택적 포트를 누적하며 65535 초과·0을 거절한다. 실패는 HTTP_BAD_REQUEST로 전달되고 기존 응답 매핑에서 400이 된다.
+
+test_host_policy는 정상·거절 Host와 요청 라인 표본을 파싱한다. test_path_bounds는 실제 private decode_path를 작은 버퍼로 호출해 반환값·종료 문자·버퍼 밖 sentinel을 확인한다. test_file_access는 기존 check → http_send_response → get_prepare/open_static 흐름으로 chmod(0000)의 403 및 정적 루트 누락의 500을 검사한다. 요청 라인·경로·파일 접근의 제품 정책은 바꾸지 않았다.

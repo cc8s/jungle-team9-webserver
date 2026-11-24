@@ -13,7 +13,7 @@
 | 수신·파싱 | [test_http_request.c](../../tests/test_http_request.c) · `main` | socketpair로 5,000바이트 본문 수신, 초기 4 KiB 이후 버퍼 확장과 필드 유효성 확인 | 통과 — 자동 |
 | 수신·파싱 | [test_http_request.c](../../tests/test_http_request.c) · `main` | 불완전 요청 후 shutdown(SHUT_WR)의 EOF를 HTTP_INCOMPLETE_REQUEST로 구분 | 통과 — 자동 |
 | 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `error` | Host 누락, 비정상 행 구분, 지원하지 않는 HTTP 버전 검출 | 통과 — 자동 |
-| 요청 검증 | — | Host의 상세 문법과 모든 비정상 요청 라인 조합 | 미실행 |
+| 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `test_host_policy` | Host B안 정상·거절 입력, 정상 입력 모든 접두 길이, 비정상 요청 라인과 미지원 버전 표본 검증 | 통과 — 자동 |
 | 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `error` | Content-Length의 음수·비숫자·중복·정수 오버플로우 거절 | 통과 — 자동 |
 | 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `error` | Transfer-Encoding 단독과 Content-Length 병용 오류 구분 | 통과 — 자동 |
 | 요청 검증 | [test_http_request.c](../../tests/test_http_request.c) · `error` | POST Content-Length 누락은 411용 오류, 중복 Content-Type은 400용 오류 | 통과 — 자동 |
@@ -29,7 +29,7 @@
 | 수신 기한 | — | recv 성공 직후 기한이 넘어가는 스케줄링 상황의 결정적 재현 | 미실행 |
 | 응답 경계 | [test_http_response.c](../../tests/test_http_response.c) · `test_api_bounds` | SIZE_MAX 오프셋·길이, 잘못된 method/host 범위, 빈 URI, NULL 인자에 500 | 통과 — 자동 |
 | 응답 경계 | [test_http_response.c](../../tests/test_http_response.c) · `test_api_bounds` | 오류 응답은 수신 버퍼 없이도 생성, 유효 버퍼 안의 URI 8 KiB 이상은 414 | 통과 — 자동 |
-| 응답 경계 | — | 내부 decode_path에 작은 출력 버퍼를 직접 전달해 종료 문자·index.html 치환 경계 검증 | 미실행 |
+| 응답 경계 | [test_path_bounds.c](../../tests/test_path_bounds.c) | 실제 decode_path에 작은 출력 버퍼를 직접 전달해 종료 문자·index.html 치환 경계·버퍼 밖 sentinel 보존 검증 | 통과 — 자동 |
 | GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `check` | `/`의 index.html과 64 KiB PNG 본문 바이트·Content-Length 일치 | 통과 — 자동 |
 | GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `check` | PNG MIME, 쿼리 제거와 퍼센트 디코딩 확인 | 통과 — 자동 |
 | GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `test_get_routes` | HTML·CSS·JS·JSON·PNG·JPG·JPEG·미등록 확장자 및 대문자 CSS의 MIME·본문 바이트 검증 | 통과 — 자동 |
@@ -37,7 +37,7 @@
 | GET 정적 파일 | [test_http_response.c](../../tests/test_http_response.c) · `test_get_routes` | `/css/main.css?v=1` 실제 하위 디렉토리 파일의 MIME·본문·길이 검증 | 통과 — 자동 |
 | GET 경로 보호 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 없는 파일 404, 디렉토리 403, 중간·최종 심볼릭 링크 403 | 통과 — 자동 |
 | GET 경로 보호 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 인코딩된 .., %00, 잘못된 %XX 차단 | 통과 — 자동 |
-| GET 경로 보호 | — | 실제 파일 권한 거부의 403, 정적 파일 루트 접근 실패의 500 | 미실행 |
+| GET 경로 보호 | [test_http_response.c](../../tests/test_http_response.c) · `test_file_access` | 실제 파일 chmod(0000)의 403, www 루트 누락의 500 | 통과 — macOS 일반 사용자 |
 | 오류 응답 | [test_http_response.c](../../tests/test_http_response.c) · 상태 매핑 목록 | A 오류의 400/408/411/413/414/431/500/501/505 변환 | 통과 — 자동 |
 | 라우팅 | [test_http_response.c](../../tests/test_http_response.c) · `check` | GET /api/users는 405 + Allow: POST, POST /는 404 | 통과 — 자동 |
 | 라우팅 | 수동 TCP 검증 · 저장된 전용 테스트 코드 없음 | 인코딩·쿼리가 있는 예약 API 경로, 알 수 없는 POST 경로 확인 | 통과 — 수동 |
@@ -132,3 +132,28 @@ make test BUILD=build/f1-get-routing-sanitize TBIN=tests/bin/f1-get-routing-sani
 - 두 작업의 일반 전체 및 ASan/UBSan 검사가 통과했다. 통합 후 `make test`에서도 신규 C 테스트와 Python 도구 경계 테스트를 실행해 통과했다. 실제 TCP·Linux·LeakSanitizer 검증은 제외한다.
 
 `make test`는 C 테스트 전체 실행 후 `python3 tests/tools/test_upload_fixture.py`를 실행한다. 상세 입력·기대·실제 결과와 전용 sanitizer 실행 명령은 위 결과 문서에 기록했다.
+
+## 카테고리 4 — Host B안·요청·경로 검증 (2026-11-24)
+
+| 입력 | 기대 결과·검증 방법 | 실제 결과 |
+|---|---|---|
+| 단일 이름·대소문자·하이픈·마지막 점·IPv4·IPv6·포트 1/65535/선행 0·앞뒤 OWS | COMPLETE, 정상 요청의 모든 접두 길이는 최종 완성 전 NEED_MORE | 통과 |
+| 빈 Host·금지 문자·빈 라벨·잘못된 IPv4/IPv6·zone ID·IPvFuture·빈/문자/0/초과 포트·혼합 대소문자 중복 헤더 | BAD_REQUEST (400용 오류) | 통과 |
+| 빈/잘못된 메서드, 공백·탭 위치, 빈 구성요소, absolute/authority/asterisk-form, fragment, 잘못된 버전 형태 | BAD_REQUEST; origin-form 기존 정책 유지 | 통과 |
+| HTTP/1.0 및 HTTP/2.0 | UNSUPPORTED_VERSION (505용 오류) | 통과 |
+| decode_path `/a`의 용량 0/1/2/3, `/%61?ignored` | 부족 시 414, 용량 3이면 `/a`와 NUL; 앞뒤 sentinel 보존 | 통과 |
+| `/` 치환 용량 2·sizeof("/index.html")−1·정확 크기 | 부족 시 414, 정확 크기 성공·NUL·sentinel 보존 | 통과 |
+| 잘못된 %·%0·%00 및 상위 경로 | 각각 400/400/400/403, sentinel 보존 | 통과 |
+| 실제 chmod(0000) 파일 /denied | 403, 일반 사용자(uid 501) 실행으로 생략 없음 | 통과 |
+| www를 임시 이름으로 이동 후 GET / | 500, 이후 루트 복구 | 통과 |
+
+최초 실행에서 macOS inet_pton이 `[fe80::1%lo0]`를 허용해 거절 테스트가 실패했다. IPv6 내부 문자 검사를 추가해 zone ID를 명시적으로 차단한 뒤 아래 전체 검사를 다시 실행했다. 임시 파일은 검증 후 정리하며 기존 업로드 파일을 사용하지 않는다. 무한한 비정상 조합 전체를 열거한 것은 아니며 명시된 표본과 경계를 검증한다.
+
+```bash
+make test
+make test BUILD=build/f1-host-sanitize TBIN=tests/bin/f1-host-sanitize \
+  EXTRA_CFLAGS='-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer' \
+  EXTRA_LDFLAGS='-fsanitize=address,undefined'
+```
+
+재실행한 일반 전체 및 ASan/UBSan 전체 검사 통과. Python 업로드 도구 경계 검사도 통과했다. 실제 TCP·Linux·LeakSanitizer는 이번 검증 범위가 아니다.

@@ -1,5 +1,6 @@
 #include "http_request.h"
 #include <errno.h>
+#include <arpa/inet.h>
 #include <limits.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -20,6 +21,71 @@ static int is_token(unsigned char c)
 {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9') || (c && strchr("!#$%&'*+-.^_`|~", c));
+}
+
+/* Project Host policy: DNS-style ASCII names or IP literals, optional 1..65535 port. */
+static int valid_host(const unsigned char *data, size_t length)
+{
+    size_t host_end = 0, port_start = length;
+    if (data[0] == '[') {
+        while (host_end < length && data[host_end] != ']') host_end++;
+        if (host_end == length || host_end <= 1 || host_end - 1 >= INET6_ADDRSTRLEN) return 0;
+        for (size_t i = 1; i < host_end; i++) {
+            unsigned char c = data[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                  (c >= 'A' && c <= 'F') || c == ':' || c == '.')) return 0;
+        }
+        char address[INET6_ADDRSTRLEN];
+        memcpy(address, data + 1, host_end - 1);
+        address[host_end - 1] = 0;
+        struct in6_addr parsed;
+        if (inet_pton(AF_INET6, address, &parsed) != 1) return 0;
+        host_end++;
+        if (host_end < length) {
+            if (data[host_end] != ':') return 0;
+            port_start = host_end + 1;
+        }
+    } else {
+        while (host_end < length && data[host_end] != ':') host_end++;
+        if (!host_end) return 0;
+        size_t end = host_end;
+        if (data[end - 1] == '.') end--;
+        if (!end) return 0;
+        size_t label = 0;
+        int numeric = 1;
+        for (size_t i = 0; i < end; i++) {
+            unsigned char c = data[i];
+            if (c == '.') {
+                if (!label || data[i-1] == '-') return 0;
+                label = 0;
+            } else {
+                int alnum = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                            (c >= '0' && c <= '9');
+                if ((!alnum && c != '-') || (!label && c == '-')) return 0;
+                label++;
+                if (c < '0' || c > '9') numeric = 0;
+            }
+        }
+        if (!label || data[end-1] == '-') return 0;
+        /* A dotted all-numeric value is treated as IPv4, not a fallback name. */
+        if (numeric && memchr(data, '.', end)) {
+            char address[INET_ADDRSTRLEN];
+            if (host_end >= sizeof(address)) return 0;
+            memcpy(address, data, host_end); address[host_end] = 0;
+            struct in_addr parsed;
+            if (inet_pton(AF_INET, address, &parsed) != 1) return 0;
+        }
+        if (host_end < length) port_start = host_end + 1;
+    }
+    if (host_end == length) return 1;
+    if (port_start == length) return 0;
+    unsigned int port = 0;
+    for (size_t i = port_start; i < length; i++) {
+        if (data[i] < '0' || data[i] > '9') return 0;
+        port = port * 10 + (unsigned int)(data[i] - '0');
+        if (port > 65535) return 0;
+    }
+    return port != 0;
 }
 
 /* Return an index into data, never a pointer that realloc could invalidate. */
@@ -106,8 +172,7 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
             http_field field = {value, tail - value};
             if (header_is(data, start, colon-start, "Host")) {
                 if (has_host++ || !field.length) return fail(r, HTTP_BAD_REQUEST);
-                for (size_t i = value; i < tail; i++)
-                    if (data[i] <= 32 || strchr("/\\,@?#", data[i])) return fail(r, HTTP_BAD_REQUEST);
+                if (!valid_host(data + value, field.length)) return fail(r, HTTP_BAD_REQUEST);
                 r->host = field;
             } else if (header_is(data, start, colon-start, "Content-Length")) {
                 if (has_length++ || !field.length) return fail(r, HTTP_BAD_REQUEST);
