@@ -113,3 +113,58 @@ EINTR 강제 발생, 파일 읽기 실패 강제 주입, FD 누수 계측, 타�
 - 유효 버퍼 안의 URI 길이 8 KiB 및 초과 입력에 414 확인.
 - 기존 바이너리 본문·부분 수신·EOF·헤더/본문/쓰기 기한 회귀 테스트 유지.
 - make test와 별도 build/bounds-sanitize의 ASan/UBSan 테스트를 실행했고 모두 통과했다. recv 성공 직후 기한이 넘어가는 스케줄링 상황과 내부 decode_path의 작은 출력 버퍼 직접 호출은 자동 재현하지 않았다.
+
+## POST 확장 검증 계획 — 전체 미실행
+
+현재 테스트의 POST → 405는 기존 구현에 대한 검증이다. 아래 항목은 설계한 POST 기능 구현 후 추가·갱신할 테스트이며, 통과한 기존 결과로 간주하지 않는다.
+
+| 항목 | 입력·상황 | 기대 결과 | 방법 |
+|---|---|---|---|
+| 길이 필수 | POST, Content-Length 누락 | 본문을 기다리지 않고 411 | 파서·socketpair·curl |
+| 길이 0 | 예약 API에 명시적 Content-Length: 0 | 200, data:null, 업로드 파일 없음 | 통합 테스트 |
+| 길이 검증 | 음수·비숫자·중복·오버플로우, 전송 코딩 충돌 | 400, 기존 전송 코딩 단독은 501 | 파서 회귀 |
+| 타입 분기 | 양수 본문의 타입 누락·경로와 다른 타입·multipart | 415 JSON 오류 | API 통합 |
+| 사용자 JSON | 홍길동·25·배열·중첩 address 예시 객체 | 200 JSON, 값과 타입 보존 | JSON 단위·curl |
+| JSON 문법 | 잘못된 이스케이프·숫자·괄호·후행 데이터 | 400 | JSON 단위 |
+| JSON 중복 키 | 같은 키 및 이스케이프로 같은 키 | 400 | JSON 단위 |
+| JSON 깊이 | 최상위 1 기준 16단계·17단계 | 16 허용, 17은 413 | 경계 단위 |
+| 객체 크기 | 필드 100개·101개 | 100 허용, 101은 413 | 경계 단위 |
+| 배열 크기 | 원소 1,000개·1,001개 | 1,000 허용, 1,001은 413 | 경계 단위 |
+| 전체 값 수 | 컨테이너 포함 10,000개·10,001개 | 10,000 허용, 초과 413 | 경계 단위 |
+| URL 인코딩 폼 | key=value, %XX, +, 한글 UTF-8 | 200 JSON, 정확한 디코딩 | 폼 단위·curl |
+| 폼 필드 제한 | 100개·101개 | 100 허용, 101은 413 | 폼 단위 |
+| API 라우팅 | GET /api/users, POST /없는경로 | 각각 405 + Allow: POST, 404 | API 통합 |
+| 경로 전처리 | 쿼리·인코딩된 예약 API 경로 | 전처리 후 같은 API 분기 | API 통합 |
+| 정상 업로드 | 파일을 Base64 JSON으로 전송 | 201, 식별자·원본 파일명·디코딩 크기 반환 | Python 인코딩 + curl |
+| 바이트 보존 | NUL·CRLF·0x00~0xFF 포함 원본 | 저장 파일과 원본 완전 일치 | bytes 비교·SHA-256 |
+| 메타데이터 분리 | filename·content_type과 실제 내용이 다름 | 형식 변환 없이 원본 바이트 보존 | 파일 비교 |
+| 경로 입력 | filename에 ../·절대 경로·기존 파일명 | 저장 경로로 사용하지 않음, 저장 루트 밖 변경 없음 | 임시 디렉토리 |
+| 고유 이름 | 동일 원본 파일명으로 반복 업로드 | 별도 서버 식별자로 저장, 덮어쓰기 없음 | 파일 목록·내용 비교 |
+| 잘못된 업로드 | 필수 필드 누락·타입 오류·잘못된 Base64 | 400, 불완전 파일 없음 | 단위·통합 |
+| 수신 본문 상한 | Base64와 메타데이터 포함 1 MiB 및 초과 | 상한 이내 처리, 초과 413 | 요청 바이트 길이 기준 |
+| 본문 기한 | POST를 조금씩 보내며 10초 초과 | 기한 연장 없이 408 | 기존 기한 테스트 확장 |
+| 파일 실패 | 생성·쓰기 실패 또는 부분 쓰기 후 오류 | 적절한 오류, 자신의 불완전 파일·FD 정리 | 실패 주입 |
+| 비공개 저장 | 저장 파일을 GET 정적 경로로 요청 | www와 별개이며 업로드 파일 직접 제공 안 함 | curl |
+| JSON 응답 | 한글·따옴표·역슬래시·제어 문자 포함 값 | 유효 JSON, Content-Length는 UTF-8 바이트 수 | JSON 파서로 재검증 |
+| 전송 실패 | 저장 성공 후 상대 연결 종료 | 추가 500 없음, 성공 저장 파일과 자원 정리 구분 | socketpair |
+| GET 회귀 | 기존 HTML·바이너리 파일과 오류 | 기존 상태·MIME·본문 유지 | 기존 테스트 전체 |
+
+### curl 수동 테스트 준비
+
+구현 후 준비할 파일은 사용자 객체 user.json, 폼 요청 데이터, 업로드 원본 파일, Python 인코딩으로 만든 upload.json이다. 아래 명령은 향후 사용 예시이며 현재 서버의 성공 동작을 의미하지 않는다.
+
+```bash
+curl -i http://localhost:8000/api/users \
+  -H 'Content-Type: application/json' --data-binary @user.json
+curl -i http://localhost:8000/api/form \
+  --data-urlencode 'name=홍길동' --data-urlencode 'age=25'
+curl -i http://localhost:8000/api/upload \
+  -H 'Content-Type: application/json' --data-binary @upload.json
+curl -i -X POST http://localhost:8000/api/users -H 'Content-Length: 0'
+```
+
+411은 Content-Length와 Transfer-Encoding을 모두 생략한 원시 POST 헤더로 검사한다. curl은 옵션에 따라 Content-Length: 0을 자동 추가할 수 있으므로 송신 헤더를 확인하거나 Python 소켓을 사용한다.
+
+### 이번 문서 작업의 확인
+
+설계·호출 흐름·테스트 계획을 대조하고 POST 구현 전 상태와 예정 동작을 구분했다. 코드·테스트 도구·uploads_storage 디렉토리는 만들지 않았으며 POST 기능 테스트도 실행하지 않았다.

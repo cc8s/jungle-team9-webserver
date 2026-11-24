@@ -32,7 +32,7 @@ A(수신·파싱)와 B(응답)를 연결했다. 기존 main의 초기화와 반�
 | A: HTTP request 파싱 | 수신 누적 → 요청 라인 → 헤더 → Content-Length와 첫 요청 경계 확인 | 요청 정보 또는 오류를 B에 전달할 수 있고 파서 테스트가 통과함 |
 | B: HTTP response 생성·쓰기 | 경로 검증 → 파일 접근 → MIME·길이 결정 → 헤더·본문 전송 → 정리 | GET 정적 응답과 오류 응답 테스트가 통과하고 연결을 닫음 |
 
-POST 처리는 이후 구현한다. 각 단위의 상세 인터페이스와 타임아웃 구현 수단은 그릴링에서 합의한다. A만 완료된 시점에는 정상 HTTP 응답을 기대하지 않는다.
+현재 POST는 A의 본문 수신까지 구현돼 있고 B는 405를 반환한다. 아래 POST 확장 흐름은 앞으로 구현할 계획이며 현재 코드 흐름과 구분한다.
 
 ## 전체 흐름 — A/B 및 본문 타임아웃 구현
 
@@ -136,3 +136,52 @@ http_send_response
 ```
 
 헤더 recv에 전달하는 길이는 남은 수신 버퍼 공간과 헤더 누적 상한 중 작은 값이다. 필드 범위 검사는 length <= buffer.length - offset 형태로 덧셈 오버플로우를 피한다.
+
+## POST 확장 예정 흐름 — 아직 미구현
+
+```text
+main: accept → 기존 논블로킹 설정
+  A: http_receive_request / http_parse_request 확장
+    Content-Length 존재 여부와 Content-Type 저장
+    헤더 문법·전송 코딩 충돌 검사 → POST 길이 누락이면 오류(411)
+    명시적 0이면 본문 대기 없이 완료
+    양수이면 기존 본문 1 MiB·10초 제한으로 수신
+  B: http_send_response 확장
+    A 오류 매핑 → JSON 오류 응답
+    필드 범위 검사 → decode_path → 경로·메서드 분기
+      GET 정적 경로 → 기존 파일 응답
+      예약 API의 비POST → 405 + Allow: POST
+      알 수 없는 POST 경로 → 404
+      POST 예약 경로 → handle_post
+        길이 0 → 200 + data:null
+        Content-Type 검증 → 지원하지 않으면 415
+        /api/users → JSON 파싱·객체 검사 → 결과 JSON 생성
+        /api/form → 폼 파싱 → 결과 JSON 생성
+        /api/upload → JSON 파싱 → Base64 디코딩 → 바이트 보존 저장
+          저장 성공 → 201 + 식별자·원본 파일명·크기 JSON
+    공통 send_headers → send_all
+  응답·파싱 임시 자원 정리
+  기존 main: free(buffer.data) → close(conn_fd)
+```
+
+### 역할 분리와 재사용
+
+- handle_post 및 아래 세부 이름은 추가할 역할이며 아직 존재하는 함수가 아니다. 구현 시 작고 읽을 수 있는 단위로 배치한다.
+- 기존 http_receive_request는 POST 본문 수신·기한 처리를 재사용하고, http_parse_request에 헤더 존재 여부·타입 정보를 추가한다.
+- http_send_response는 GET 정적 처리와 POST 처리를 분기한다. 기존 GET의 파일 접근 흐름은 유지한다.
+- JSON 파서는 직접 구현해 사용자 JSON과 업로드 JSON에서 공유한다. 폼 파서는 별도이며 결과 JSON 직렬화는 공유한다.
+- 업로드 처리는 Base64 디코딩, 고유 파일 생성, 전체 바이트 쓰기, 실패 파일 삭제를 담당한다. open_static으로 업로드 경로를 만들지 않는다.
+- send_headers는 상태·MIME·본문 바이트 수와 경로별 Allow를 받도록 확장한다. JSON 결과는 기존 send_all로 전송한다.
+- send_error는 기존 GET 오류 처리를 유지하면서 POST 오류 JSON을 지원한다. A에서 본문 수신 전에 발생하는 오류도 해당 정책을 연결한다.
+
+### 버퍼와 파일 소유권
+
+수신 본문은 buffer.data + request.header_length부터 request.content_length바이트다. 핸들러는 이를 문자열 종료에 의존하지 않는 길이 기반 입력으로 사용한다.
+
+수신 버퍼는 기존대로 main이 응답 완료까지 유지한다. POST 처리 측은 JSON 파싱 결과, Base64 디코딩 버퍼, 생성한 응답 JSON 버퍼와 업로드 파일 FD를 정리한다. 디코딩 바이트 길이는 별도 관리하며 strlen으로 계산하지 않는다.
+
+uploads_storage에는 서버가 생성한 이름으로만 저장한다. 디코딩·쓰기 도중 실패하면 자신이 생성한 불완전 파일만 제거한다. 정상 저장이 끝난 후에는 전송 실패 여부와 파일 생성 실패를 구분한다.
+
+### 클라이언트 테스트 도구 계획
+
+Python 3 테스트 도구가 원본 파일을 바이트로 읽고 표준 Base64 문자열로 인코딩해 UTF-8 요청 JSON 파일을 만든다. curl --data-binary @요청파일로 /api/upload에 보낸다. 수신 Content-Length는 curl이 계산하게 한다. 저장 파일을 원본과 바이트 또는 해시로 비교한다. 테스트 도구와 저장 구현은 이번 문서 작업에서 만들지 않는다.
