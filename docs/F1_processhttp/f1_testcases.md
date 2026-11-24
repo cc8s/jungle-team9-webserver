@@ -2,7 +2,7 @@
 
 현재 테스트 코드와 기존 실행 기록을 한 표로 통합했다. **통과**는 실제 실행한 범위만 뜻하며, **부분 검증**과 **미실행**은 추가 검증이 필요하다. 이전 계획표의 일괄 미실행 표시는 폐기한다.
 
-자동 테스트는 macOS에서 `make test` 및 ASan/UBSan으로 실행해 통과했다. 2026-11-24 GET·라우팅 보강에서 `make test`와 `build/f1-get-routing-sanitize` 전체 검사를 실행했다. TCP/curl 항목은 POST 구현 당시 별도로 실행한 수동 검증 기록이다.
+자동 테스트는 macOS에서 `make test` 및 ASan/UBSan으로 실행해 통과했다. 2026-11-24 GET·라우팅 보강에서 `make test`와 `build/f1-get-routing-sanitize` 전체 검사를 실행했다. 기존 단일 응답 호출은 http_send_response 호환 경로로 검증하며, 새 test_persistent는 실제 handle_connection의 Content-Length 기반 재사용을 검증한다. Persistent 변경 후 make test 및 build/persistent-sanitize의 ASan/UBSan 전체 검사를 실행했다. TCP 항목은 별도 수동 검증 기록을 구분한다.
 
 | 카테고리 | 테스트 코드 | 설명 | 통과여부 |
 |---|---|---|---|
@@ -84,12 +84,23 @@
 | 자원·안정성 | [test_stability.c](../../tests/test_stability.c) · `test_kill_observation` | SIGKILL 후 부분 bin 2바이트·빈 json 0바이트·0600 잔존 관찰. 파일 쌍 원자성·디스크 동기화는 미보장 | 관찰 완료 — 내구성 미검증 |
 | 플랫폼 | [test_stability.c](../../tests/test_stability.c) 및 Linux Docker 전체 검사 | macOS/Linux에서 실제 loopback TCP 2MiB 느린 수신 바이트 일치 및 무수신 전송 실패, Linux ASan/LSan/UBSan 전체 통과 | 통과 — 실제 TCP·Linux |
 | 빌드 파이프라인 | [test_smoke.c](../../tests/test_smoke.c) | 테스트 실행 파이프라인 확인. HTTP 기능 검증으로 간주하지 않음 | 통과 — 자동 |
+| Persistent 재사용 | [test_persistent.c](../../tests/test_persistent.c) · test_mixed | 같은 연결 GET → POST → POST → GET, 요청 상태 초기화와 정상 Connection 헤더 생략 | 통과 — 자동 |
+| Persistent 파이프라인 | [test_persistent.c](../../tests/test_persistent.c) · test_pipeline | POST 본문에 다음 GET이 붙어도 본문·다음 요청 경계를 보존 | 통과 — 자동 |
+| Persistent 상한 | [test_persistent.c](../../tests/test_persistent.c) · test_pipeline | 101개 일괄 요청 중 100개만 응답, 100번째 close | 통과 — 자동 |
+| Persistent GET 본문 | [test_persistent.c](../../tests/test_persistent.c) · test_get_drain | 헤더만 보내도 즉시 응답, 이후 NUL·CRLF 본문 폐기 후 다음 요청 처리 | 통과 — 자동 |
+| Persistent GET 본문 | [test_persistent.c](../../tests/test_persistent.c) · test_get_drain | 본문·다음 요청 일괄 수신 시 정확한 폐기, close 요청은 폐기 대기 없이 종료 | 통과 — 자동 |
+| Persistent GET 본문 | [test_persistent.c](../../tests/test_persistent.c) · test_get_drain | 폐기 10초 기한과 EOF 종료, 이미 응답한 뒤 추가 408/500 없음 | 통과 — 자동 |
+| Persistent 종료 | [test_persistent.c](../../tests/test_persistent.c) · test_errors_close | 400/404/405/411/415 오류 응답 close, 뒤의 요청 미처리 | 통과 — 자동 |
+| Persistent 종료 | [test_persistent.c](../../tests/test_persistent.c) · test_errors_close | 쉼표·대소문자·복수 Connection 헤더 어느 값이든 close 반영 | 통과 — 자동 |
+| Persistent 기한 | [test_persistent.c](../../tests/test_persistent.c) · test_next_header | 유휴 5초 무응답 종료, 분할 수신한 다음 요청 성공, 다음 헤더 5초 초과 408 | 통과 — 자동 |
+| Persistent TCP | 독립 수동 TCP 검증 | GET/POST 혼합·101개 일괄 수신·GET 응답 후 본문 폐기·오류 종료·유휴 종료 | 통과 — macOS 수동 |
+| Persistent 한계 | — | 폐기 단계 I/O 강제 실패, 장시간 재사용 FD 계측, 새 연결 루프의 Linux 실행 | 미실행 |
 
 실행 방법:
 
 ```bash
 make test
-make test BUILD=build/get-split-sanitize TBIN=tests/bin/get-split-sanitize \
+make test BUILD=build/persistent-sanitize TBIN=tests/bin/persistent-sanitize \
   EXTRA_CFLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
   EXTRA_LDFLAGS='-fsanitize=address,undefined'
 

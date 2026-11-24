@@ -6,14 +6,14 @@
 
 ## 합의한 동작
 
-- 수신 버퍼는 응답 처리 완료까지 유지하고 연결 정리 시 해제한다. 중간 flush나 버퍼 압축은 하지 않는다.
+- 수신 버퍼는 연결 단위로 유지한다. 응답과 GET 본문 폐기 후 소비한 바이트를 memmove로 제거하며 다음 요청은 보존한다. 연결 종료 시에만 해제한다.
 - GET은 헤더 검증 후 본문을 기다리지 않는다. POST는 Content-Length만큼 수신하며 헤더 완료부터 10초 전체 기한을 적용한다.
-- consumed는 GET 등 본문을 사용하지 않는 메서드에서 헤더 길이, POST에서 헤더 길이 + Content-Length다. 무시한 본문과 후속 바이트는 연결 종료 시 버린다.
+- consumed는 GET 등 본문을 사용하지 않는 메서드에서 헤더 길이, POST에서 헤더 길이 + Content-Length다. GET 본문은 응답 후 길이만큼 폐기하고 후속 요청 바이트는 보존한다.
 
 - 수신 버퍼는 4 KiB로 시작해 필요할 때 확장한다. 요청 라인 8 KiB, 전체 헤더(요청 라인 포함) 32 KiB, 본문 1 MiB를 상한으로 둔다.
 
 - HTTP/1.1 GET 정적 파일과 POST JSON·폼·Base64 업로드를 구현했다. 아래 POST 계약과 구현 결과를 현재 동작 기준으로 사용한다.
-- 연결당 첫 요청만 처리하고 Connection: close로 응답한 뒤 연결을 닫는다. 후속 요청은 처리하지 않는다.
+- HTTP/1.1은 연결을 재사용한다. 정상 응답은 Connection 헤더를 생략하며 요청 close·오류·100번째 응답에는 close를 명시한다.
 - 구현·검증·커밋 단위는 A: HTTP request 파싱, B: HTTP response 생성·쓰기로 나눈다.
 
 - 수신 버퍼와 파서를 분리한다. 수신 데이터를 누적하고 수신 직후 파서에 전달한다.
@@ -246,3 +246,14 @@ POST 확장에서 추가하는 상태는 201(저장 성공), 411(명시적 길�
 기존 정책 변경 없이 I/O 중단·실패, 파일 전송 중 읽기 실패, 업로드 저장 복구와 ID 충돌을 검사한다. 실패 주입은 실제 소스의 syscall 경계에서 시행하며 close 오류는 FD가 이미 닫힌 뒤 오류가 보고되는 모델로 한정한다. 고정·역행 시계의 ID 비중복과 실제 기존 파일 충돌의 재시도는 별개 사례로 검증한다.
 
 반복 요청의 FD와 RSS를 계측하고, 실제 TCP는 loopback·OS 자동 할당 포트의 전용 listener에서 제품 수신·응답 함수를 실행한다. 제품 main의 고정 포트 서버 전체 실행과는 구분한다. RSS 증가 상한 검사는 장시간 누수 부재의 증명이 아니며 계측 도구의 메모리 보관 영향을 분리한다. 강제 종료는 저장 함수의 쓰기 경계에서 SIGKILL로 중단해 산출물을 관찰한다. 부분 파일 잔존을 성공적인 원자성·fsync 보장으로 간주하지 않는다. 결과는 f1_category6_results.md와 f1_category7_results.md에 기록한다.
+
+## Persistent Connection 구현
+
+현재 연결 계약은 [refactor_persistentCon.md](../refactor_persistentCon.md)를 따른다. 이전 절의 연결당 한 요청·고정 close 설명은 과거 구현 이력이다.
+
+- main은 초기화와 accept/O_NONBLOCK 설정을 유지하고 handle_connection을 호출한다.
+- http_connection.c가 요청 반복·버퍼 memmove·유휴 5초·최대100개·GET 응답 후 본문 폐기10초를 관리한다.
+- http_respond는 io_error와 close_connection을 반환한다. 오류 응답은 정상적으로 전송됐어도 연결을 종료한다.
+- 기존 http_send_response는 단일 응답 호출자의 호환용 API로 유지하며 close 응답을 만든다. 실제 서버의 재사용 경로는 http_respond를 사용한다.
+- 첫 헤더는 accept부터5초, 다음 헤더는 첫 바이트 또는 버퍼 요청 처리 시작부터5초, POST 본문10초·쓰기 진행 없음5초를 유지한다.
+- 연결 간 동시성은 추가하지 않았다. 한 연결의 유휴 대기 중 다른 accept 처리는 지연된다.

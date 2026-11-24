@@ -12,12 +12,12 @@ main()
   while (1)
     accept()             ← 블로킹 리스닝 소켓
     기한 기록 → fcntl(conn_fd, F_SETFL, 기존 플래그 | O_NONBLOCK)
-    http_receive_request(conn_fd, &buffer, &request)
-      http_parse_request(buffer.data, buffer.length, &request)
-      NEED_MORE이면 버퍼 확장 및 read 후 반복
-    파싱 결과 또는 오류 출력
-    http_send_response(conn_fd, &buffer, &request)
-    free(buffer.data)
+    handle_connection(conn_fd, accepted_at)
+      연결 단위 buffer 생성
+      요청마다 request 초기화 → http_receive_request
+      http_respond → GET/POST 응답
+      종료 여부 판정 → GET 본문 폐기 → memmove
+      마지막에 buffer 해제
     close(conn_fd)
 ```
 
@@ -264,3 +264,11 @@ test_stability의 반복 요청은 socketpair → http_receive_request → http_
 - `/api/upload → upload`: 필수 문자열 타입 확인 후 content_type 길이가 0이면 400을 반환하며 저장하지 않는다.
 - `/api/form → form_parse → form_decode`: 키·값의 %XX 및 + 해석 후 바이트가 NUL이면 400을 반환한다. form_parse가 중간 객체를 해제하고 post_prepare가 invalid_body 응답을 만든다.
 - `form_parse`: &로 조각 경계를 찾고 빈 조각이면 즉시 건너뛴다. 비어 있지 않은 조각만 필드 수를 세고 첫 =로 분리한다. =가 없으면 전체를 키, 빈 문자열을 값으로 전달한다. 이후 form_decode로 키를 해석하고 길이가 0이면 400으로 중단한다. 값 디코딩과 중복 키 검사는 유지한다.
+
+## Persistent Connection 실제 흐름
+
+http_connection.c의 handle_connection이 연결을 최대100개 요청까지 반복한다. 유휴 상태의 wait_next_request는 MSG_PEEK로 다음 첫 바이트·EOF를 확인하고, 데이터가 있으면 다음 요청 헤더 기한을 시작한다. 버퍼에 이미 데이터가 있으면 바로 요청 처리에 들어간다.
+
+http_respond는 공통 응답 준비·전송 후 `{io_error, close_connection}`을 반환한다. GET/POST 오류는 모두 close이며 정상 유지 응답은 Connection을 생략한다. 과거 http_send_response 호출은 기존 단일 응답 테스트·호환 호출자를 위해 close 방식으로 유지했다. 새로운 실제 연결 동작은 test_persistent가 Content-Length 기반 수신으로 검증한다.
+
+정상 GET 응답 뒤에는 헤더 consumed를 제거하고 discard_get_body가 버퍼 안의 본문부터 제거한다. 부족한 본문만 제한된 길이로 recv해 다음 요청을 초과 수신·폐기하지 않는다. 10초·EOF·I/O 실패는 두 번째 응답 없이 반환한다. consume은 memmove로 남은 요청을 보존한다.
