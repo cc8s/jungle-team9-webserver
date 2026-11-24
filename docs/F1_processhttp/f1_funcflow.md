@@ -248,3 +248,7 @@ make test는 신규 C 테스트를 자동 발견해 실행한 뒤 Python 도구 
 http_parse_request는 Host 헤더의 앞뒤 OWS를 제거한 후 valid_host를 호출한다. 대괄호 주소는 허용 문자 확인 → inet_pton(AF_INET6), 그 외는 라벨 문법 → 숫자·점 주소의 inet_pton(AF_INET) 순서로 검사한다. 이후 선택적 포트를 누적하며 65535 초과·0을 거절한다. 실패는 HTTP_BAD_REQUEST로 전달되고 기존 응답 매핑에서 400이 된다.
 
 test_host_policy는 정상·거절 Host와 요청 라인 표본을 파싱한다. test_path_bounds는 실제 private decode_path를 작은 버퍼로 호출해 반환값·종료 문자·버퍼 밖 sentinel을 확인한다. test_file_access는 기존 check → http_send_response → get_prepare/open_static 흐름으로 chmod(0000)의 403 및 정적 루트 누락의 500을 검사한다. 요청 라인·경로·파일 접근의 제품 정책은 바꾸지 않았다.
+
+## 카테고리 5 테스트 흐름 (2026-11-24)
+
+test_transfer_timing은 실제 수신·응답 소스를 테스트 번역 단위에 포함해 시계와 I/O 경계만 제어한다. 수신은 실제 recv 성공 → 모사 시간 이동 → buffer.length 누적 → 재파싱 → 완료 또는 재대기 타임아웃으로 흐른다. 전송은 실제 준비 상태 poll·모사 대기 → 부분 send → 양수 결과에서 deadline 갱신을 확인한다. 업로드는 실제 post_prepare/store_upload 완료 → 헤더·본문의 지정 단계에서 send 실패 → 반환 -1 → 실제 수신 바이트·송신 호출 수·남은 파일 쌍과 권한 검증 순서다. 제품 함수와 자원 소유권은 바꾸지 않았다.

@@ -26,7 +26,7 @@
 | 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_header_timeout` | 이미 기한이 만료됐으면 읽을 데이터가 있어도 타임아웃 | 통과 — 자동 |
 | 본문 정책 | [test_http_request.c](../../tests/test_http_request.c) · `test_body_policy` | GET은 Content-Length가 있어도 본문 없이 헤더만으로 완료 | 통과 — 자동 |
 | 수신 기한 | [test_http_request.c](../../tests/test_http_request.c) · `test_body_policy` | POST 본문을 2초마다 추가해도 헤더 완료부터 전체 10초 뒤 타임아웃 | 통과 — 자동 |
-| 수신 기한 | — | recv 성공 직후 기한이 넘어가는 스케줄링 상황의 결정적 재현 | 미실행 |
+| 수신 기한 | [test_transfer_timing.c](../../tests/test_transfer_timing.c) | 실제 recv 성공 직후 모사 기한 경과: GET 헤더·POST 본문의 완성/미완성 4개 분기 검증 | 통과 — 제어된 I/O·시계 |
 | 응답 경계 | [test_http_response.c](../../tests/test_http_response.c) · `test_api_bounds` | SIZE_MAX 오프셋·길이, 잘못된 method/host 범위, 빈 URI, NULL 인자에 500 | 통과 — 자동 |
 | 응답 경계 | [test_http_response.c](../../tests/test_http_response.c) · `test_api_bounds` | 오류 응답은 수신 버퍼 없이도 생성, 유효 버퍼 안의 URI 8 KiB 이상은 414 | 통과 — 자동 |
 | 응답 경계 | [test_path_bounds.c](../../tests/test_path_bounds.c) | 실제 decode_path에 작은 출력 버퍼를 직접 전달해 종료 문자·index.html 치환 경계·버퍼 밖 sentinel 보존 검증 | 통과 — 자동 |
@@ -45,7 +45,7 @@
 | 전송 | [test_http_response.c](../../tests/test_http_response.c) · `check` | 4 KiB 송신 버퍼에서 16 KiB 청크 기반 바이너리 응답 전체 바이트 일치 | 통과 — 자동 |
 | 전송 | [test_http_response.c](../../tests/test_http_response.c) · `main` | 상대가 읽지 않으면 실제 5초 쓰기 타임아웃, O_NONBLOCK 유지 | 통과 — 자동 |
 | 전송 | [test_http_response.c](../../tests/test_http_response.c) · `main` | 상대 연결 종료 후 전송 실패 반환 | 통과 — 자동 |
-| 전송 | — | 느린 수신자에게 일부씩 전송할 때 쓰기 기한 갱신 확인 | 미실행 |
+| 전송 | [test_transfer_timing.c](../../tests/test_transfer_timing.c) | 실제 socketpair 부분 송신·상대 drain과 모사 시간으로 양수 send 기한 갱신, EAGAIN 무갱신·최종 만료 검증 | 통과 — 제어된 I/O·시계 |
 | 전송 | — | poll/recv/send/read의 EINTR 및 I/O 오류 강제 주입, 전송 도중 파일 읽기 실패 | 미실행 |
 | JSON 파서 | [test_json.c](../../tests/test_json.c) | 객체·배열·숫자·불리언·null 및 한글을 해석·재직렬화, 큰 정수 원문 보존 | 통과 — 자동 |
 | JSON 파서 | [test_json.c](../../tests/test_json.c) | 문자열 NUL·surrogate pair 보존, 잘못된 UTF-8·고립 surrogate 거절 | 통과 — 자동 |
@@ -77,7 +77,7 @@
 | 업로드 저장 | [test_post.c](../../tests/test_post.c) · `test_upload_inputs` | 절대 경로·기존 파일명·NUL 메타데이터 보존 및 기존 파일 불변 | 통과 — 자동 |
 | 업로드 저장 | — | 고정 시각·시계 변경·기존 ID 충돌을 주입해 충돌 재시도와 덮어쓰기 금지 확인 | 미실행 |
 | 업로드 저장 | — | .bin 성공 후 .json 생성·쓰기·close·fchmod 실패를 주입해 자신의 파일 쌍만 삭제 | 미실행 |
-| 업로드 저장 | — | 저장 성공 후 응답 전송 실패에도 정상 저장 파일 보존, 추가 500 없음 | 미실행 |
+| 업로드 저장 | [test_transfer_timing.c](../../tests/test_transfer_timing.c) | 저장 후 첫 헤더·부분 헤더·첫 본문·부분 본문 send 실패 주입: 파일 쌍 보존·추가 응답 없음 | 통과 — 제어된 I/O·시계 |
 | 업로드 공개 범위 | [test_http_response.c](../../tests/test_http_response.c) · `test_get_routes` | 실제 저장된 .bin/.json의 직접 GET 404, 원문·인코딩 상위 경로 및 심볼릭 링크 GET 403 | 통과 — 자동 |
 | 자원·안정성 | 기존 전체 자동 테스트 + ASan/UBSan | 기존 수신·응답·JSON·POST 테스트에서 메모리 접근·정의되지 않은 동작 오류 없음, GET 분리 후 회귀 통과 | 통과 — macOS |
 | 자원·안정성 | — | 장기 반복 요청의 FD·메모리 누수 계측 및 LeakSanitizer 검사 | 미실행 |
@@ -157,3 +157,9 @@ make test BUILD=build/f1-host-sanitize TBIN=tests/bin/f1-host-sanitize \
 ```
 
 재실행한 일반 전체 및 ASan/UBSan 전체 검사 통과. Python 업로드 도구 경계 검사도 통과했다. 실제 TCP·Linux·LeakSanitizer는 이번 검증 범위가 아니다.
+
+## 카테고리 5 — 기한·전송·저장 후 실패 (2026-11-24)
+
+[상세 입력·기대 결과·실행 기록](f1_category5_results.md)에 11개 시나리오(수신 4·전송 3·저장 후 응답 실패 4)를 기록했다. 실제 제품 소스와 socketpair 바이트·디스크 저장을 사용하고, 단조 시계·poll 대기·부분 send 및 EAGAIN/EPIPE만 테스트에서 제어한다. 기한 경과 후 성공 수신 바이트 반영, 양수 send에서만 5초 갱신, 전송 실패 후 저장 파일 보존과 추가 응답 부재를 확인했다.
+
+단독·일반 전체·ASan/UBSan 전체 테스트 및 Python 도구 경계 검사가 통과했다. 제품 변경은 없다. 실제 TCP·실시간 느린 수신자·Linux·LeakSanitizer 검증과는 구분하며 해당 미실행 항목은 유지한다. 신규 C 테스트는 `make test`에서 자동 실행한다.
