@@ -114,9 +114,9 @@ EINTR 강제 발생, 파일 읽기 실패 강제 주입, FD 누수 계측, 타�
 - 기존 바이너리 본문·부분 수신·EOF·헤더/본문/쓰기 기한 회귀 테스트 유지.
 - make test와 별도 build/bounds-sanitize의 ASan/UBSan 테스트를 실행했고 모두 통과했다. recv 성공 직후 기한이 넘어가는 스케줄링 상황과 내부 decode_path의 작은 출력 버퍼 직접 호출은 자동 재현하지 않았다.
 
-## POST 확장 검증 계획 — 전체 미실행
+## POST 확장 검증 계획 — 구현 검증 결과는 하단 참조
 
-현재 테스트의 POST → 405는 기존 구현에 대한 검증이다. 아래 항목은 설계한 POST 기능 구현 후 추가·갱신할 테스트이며, 통과한 기존 결과로 간주하지 않는다.
+현재 테스트의 POST → 405는 기존 구현에 대한 검증이다. 아래 항목은 POST 기능의 전체 검증 계획이다. 실제 실행 여부는 하단 기록을 기준으로 하며 계획표 전체를 통과 결과로 간주하지 않는다.
 
 | 항목 | 입력·상황 | 기대 결과 | 방법 |
 |---|---|---|---|
@@ -167,9 +167,9 @@ curl -i -X POST http://localhost:8000/api/users -H 'Content-Length: 0'
 
 ### 이번 문서 작업의 확인
 
-설계·호출 흐름·테스트 계획을 대조하고 POST 구현 전 상태와 예정 동작을 구분했다. 코드·테스트 도구·uploads_storage 디렉토리는 만들지 않았으며 POST 기능 테스트도 실행하지 않았다.
+이 절은 POST 구현 전 문서 작업의 이력이다. 현재 구현·검증 결과는 하단 POST 구현 실제 검증을 기준으로 한다.
 
-## 업로드 세부 정책 검증 계획 — 미실행
+## 업로드 세부 정책 검증 계획 — 실행 여부는 하단 결과 참조
 
 | 항목 | 입력·상황 | 기대 결과 |
 |---|---|---|
@@ -186,4 +186,30 @@ curl -i -X POST http://localhost:8000/api/users -H 'Content-Length: 0'
 | UTF-8 표현 | 한글·유니코드 이스케이프·NUL 포함 문자열 | 디코딩된 바이트와 길이 보존, JSON 응답 시 재이스케이프 |
 | 중복 폼 | name=a&name=b, name=a&%6Eame=b | 디코딩 후 동일 필드명이므로 400 |
 
-이번 작업은 문서만 갱신했다. 파일 권한·Base64·저장 구현과 위 테스트는 아직 실행하지 않았다. 테스트 도구가 디렉토리를 준비하는 것과 서버가 디렉토리를 자동 생성하는 동작을 구분한다.
+이 표는 세부 정책 확정 당시의 검증 계획이다. 현재 실행 여부는 하단 실제 검증 기록을 기준으로 한다. 테스트 도구의 디렉토리 준비와 서버의 자동 생성 동작은 구분한다.
+
+## POST 구현 실제 검증
+
+- `make`, `make test`: JSON/form·POST 업로드 신규 테스트 및 기존 A/B 테스트 통과.
+- 별도 `build/post-sanitize`에서 `-fsanitize=address,undefined`를 켠 동일 테스트 통과. macOS의 기본 Makefile `make asan`에 있는 LeakSanitizer는 사용하지 않았다.
+- `tests/test_json.c`: 한글·NUL·surrogate pair, 잘못된 UTF-8/이스케이프/숫자, 이스케이프 동등 중복 키, 깊이16/17, 객체100/101, 배열1000/1001, 전체값10000/10001, 폼100/101과 중복 검증.
+- `tests/test_post.c`: 경로·Content-Type 분기, JSON 결과 재파싱, 0길이, 정상·비정상 Base64와 canonical pad bits, 원본 바이트 보존, 메타데이터, 파일0400, 별도 업로드 ID, 디렉토리 누락·권한거부500, 실패 후 산출물 수 확인.
+- 권한거부 테스트는 root 실행 시 우회 권한 때문에 생략하며 로그에 표시한다. 디렉토리 누락 실패 검증은 유지한다.
+- 기존 response 테스트에서 예약 API의405+Allow: POST, 알 수 없는 POST404,411 상태를 추가했다.
+- root 에이전트의 독립 TCP 검증으로 기존 GET, JSON/form 한글·중첩, URI 디코딩 라우팅,405/404/400/415/411/0길이, 업로드 .bin/.json 바이트·메타데이터0400·재전송 별도 저장·잘못된 Base64 산출물 없음 확인.
+- root 에이전트가 실제 upload_fixture.py + curl로 한글 파일명의 25,603바이트 원본을 34,247바이트 JSON으로 전송해 바이트·메타데이터·0400 자동 검증까지 통과했다.
+- Linux 실행, close/fchmod 강제 실패 주입, 결정적인 시각 충돌 주입, 프로세스 강제 종료 중 파일 쌍 일관성, 장기 FD/메모리 누수 계측은 미실행이다.
+
+### 업로드 테스트 도구
+
+서버를 프로젝트 루트에서 실행하고 기존 uploads_storage를 준비한다. 테스트용 디렉토리 생성은 운영 서버의 자동 생성 동작이 아니다.
+
+```bash
+# 요청 JSON 생성만 수행
+python3 tests/tools/upload_fixture.py photo.png --output /tmp/upload.json --content-type image/png
+
+# curl 실행 후 저장한 바이트·메타데이터·0400 검증
+python3 tests/tools/upload_fixture.py photo.png --url http://localhost:8000/api/upload --content-type image/png
+```
+
+도구는 줄바꿈 없는 일반 Base64와 패딩을 생성하며 JSON 전체 1 MiB 상한을 먼저 검사한다. 서버는 파일 저장을 실제로 수행하므로 도구가 검증 후 업로드 파일을 자동 삭제하지 않는다.

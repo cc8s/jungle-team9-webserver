@@ -32,7 +32,7 @@ A(수신·파싱)와 B(응답)를 연결했다. 기존 main의 초기화와 반�
 | A: HTTP request 파싱 | 수신 누적 → 요청 라인 → 헤더 → Content-Length와 첫 요청 경계 확인 | 요청 정보 또는 오류를 B에 전달할 수 있고 파서 테스트가 통과함 |
 | B: HTTP response 생성·쓰기 | 경로 검증 → 파일 접근 → MIME·길이 결정 → 헤더·본문 전송 → 정리 | GET 정적 응답과 오류 응답 테스트가 통과하고 연결을 닫음 |
 
-현재 POST는 A의 본문 수신까지 구현돼 있고 B는 405를 반환한다. 아래 POST 확장 흐름은 앞으로 구현할 계획이며 현재 코드 흐름과 구분한다.
+POST 본문 수신·API 처리·파일 저장을 연결했다. 아래 POST 호출 흐름을 현재 동작으로 사용한다. 이전 B 호출 흐름의 GET 전용 분기는 확장 전 기록이다.
 
 ## 전체 흐름 — A/B 및 본문 타임아웃 구현
 
@@ -137,7 +137,7 @@ http_send_response
 
 헤더 recv에 전달하는 길이는 남은 수신 버퍼 공간과 헤더 누적 상한 중 작은 값이다. 필드 범위 검사는 length <= buffer.length - offset 형태로 덧셈 오버플로우를 피한다.
 
-## POST 확장 예정 흐름 — 아직 미구현
+## POST 확장 호출 흐름
 
 ```text
 main: accept → 기존 논블로킹 설정
@@ -152,7 +152,7 @@ main: accept → 기존 논블로킹 설정
       GET 정적 경로 → 기존 파일 응답
       예약 API의 비POST → 405 + Allow: POST
       알 수 없는 POST 경로 → 404
-      POST 예약 경로 → handle_post
+      POST 예약 경로 → post_prepare
         길이 0 → 200 + data:null
         Content-Type 검증 → 지원하지 않으면 415
         /api/users → JSON 파싱·객체 검사 → 결과 JSON 생성
@@ -170,7 +170,7 @@ main: accept → 기존 논블로킹 설정
 
 ### 역할 분리와 재사용
 
-- handle_post 및 아래 세부 이름은 추가할 역할이며 아직 존재하는 함수가 아니다. 구현 시 작고 읽을 수 있는 단위로 배치한다.
+- post_prepare는 http_post.c에 구현한 POST 진입점이다. 응답 상태와 메모리 JSON 본문을 준비하며 소켓 전송은 B가 맡는다.
 - 기존 http_receive_request는 POST 본문 수신·기한 처리를 재사용하고, http_parse_request에 헤더 존재 여부·타입 정보를 추가한다.
 - http_send_response는 GET 정적 처리와 POST 처리를 분기한다. 기존 GET의 파일 접근 흐름은 유지한다.
 - JSON 파서는 직접 구현해 사용자 JSON과 업로드 JSON에서 공유한다. 폼 파서는 별도이며 결과 JSON 직렬화는 공유한다.
@@ -188,8 +188,28 @@ uploads_storage는 미리 준비된 디렉토리이며 서버가 시작 시 생�
 
 ### 클라이언트 테스트 도구 계획
 
-Python 3 테스트 도구가 기존 uploads_storage 테스트 디렉토리를 준비하고 원본 파일을 바이트로 읽어, 필요한 패딩을 포함한 줄바꿈 없는 일반 Base64 문자열로 인코딩해 UTF-8 요청 JSON 파일을 만든다. curl --data-binary @요청파일로 /api/upload에 보낸다. 수신 Content-Length는 curl이 계산하게 한다. 저장 파일을 원본과 바이트 또는 해시로 비교한다. 테스트 도구와 저장 구현은 이번 문서 작업에서 만들지 않는다.
+Python 3 테스트 도구가 기존 uploads_storage 테스트 디렉토리를 준비하고 원본 파일을 바이트로 읽어, 필요한 패딩을 포함한 줄바꿈 없는 일반 Base64 문자열로 인코딩해 UTF-8 요청 JSON 파일을 만든다. curl --data-binary @요청파일로 /api/upload에 보낸다. 수신 Content-Length는 curl이 계산하게 한다. 저장 파일을 원본과 바이트 또는 해시로 비교한다. tests/tools/upload_fixture.py가 해당 역할을 수행한다. 서버를 먼저 실행하고 uploads_storage를 준비한 상태에서 사용한다.
 
 ### 파서 내부 표현 보완
 
 JSON 문자열은 디코딩된 UTF-8 바이트와 길이를 함께 보관한다. 폼은 이름과 값을 디코딩한 뒤 필드명 중복을 검사하고 중복이면 400을 반환한다. Base64 형식 검증과 디코딩은 파일 생성 전에 완료해 잘못된 입력이 파일을 남기지 않게 한다.
+
+## POST 구현의 실제 함수 연결
+
+```text
+http_parse_request → Content-Length 존재 여부·Content-Type·411 판정
+http_send_response
+  request_status → POST 오류면 json_error
+  필드 범위 검사 → decode_path → POST/예약 API/정적 경로 분기
+  POST: post_prepare
+    content_type → json_parse 또는 form_parse
+    /api/users·/api/form: json_write
+    /api/upload: upload → base64_decode → store_upload
+      UTC ID → openat으로 .bin/.json 예약 → write_file
+      metadata JSON → fchmod(0400) → close
+    JSON 응답 메모리 준비
+  send_json_response → send_headers → send_all → 응답 메모리 해제
+main → 수신 버퍼 free → 연결 close
+```
+
+json_free는 파싱 트리와 디코딩한 문자열을 회수한다. post_prepare는 트리를 해제하며, store_upload는 디코딩 바이트와 분리된 파일 자원을 관리한다. GET/POST의 전송 루프와 5초 진행 제한은 공유한다.

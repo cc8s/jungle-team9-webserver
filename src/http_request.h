@@ -17,13 +17,13 @@ typedef enum {
     HTTP_HEADERS_TOO_LARGE, HTTP_BODY_TOO_LARGE,
     HTTP_UNSUPPORTED_TRANSFER, HTTP_UNSUPPORTED_VERSION,
     HTTP_READ_ERROR, HTTP_INCOMPLETE_REQUEST, HTTP_NO_MEMORY,
-    HTTP_HEADER_TIMEOUT, HTTP_BODY_TIMEOUT
+    HTTP_HEADER_TIMEOUT, HTTP_BODY_TIMEOUT, HTTP_LENGTH_REQUIRED
 } http_request_error;
 
 typedef struct {
-    http_field method, target, version, host, connection;
+    http_field method, target, version, host, connection, content_type;
     size_t header_length, content_length, consumed;
-    int headers_complete;
+    int headers_complete, has_content_length;
     http_request_error error;
 } http_request;
 

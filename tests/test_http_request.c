@@ -191,6 +191,8 @@ int main(void)
     assert(r.method.length == 4 && !memcmp(data + r.method.offset, "POST", 4));
     assert(r.target.length == 9 && !memcmp(data + r.target.offset, "/file?q=1", 9));
     error("GET / HTTP/1.1\r\n\r\n", HTTP_BAD_REQUEST);
+    error("POST /api/users HTTP/1.1\r\nHost: x\r\n\r\n", HTTP_LENGTH_REQUIRED);
+    error("POST /api/users HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n", HTTP_BAD_REQUEST);
     error("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n", HTTP_BAD_REQUEST);
     error("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: x\r\n\r\n", HTTP_BAD_REQUEST);
     error("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\n", HTTP_BAD_REQUEST);

@@ -90,7 +90,7 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
         r->target = (http_field){first + 1, second - first - 1};
         r->version = (http_field){second + 1, 8};
 
-        int has_length = 0, has_transfer = 0, has_host = 0;
+        int has_length = 0, has_transfer = 0, has_host = 0, has_type = 0;
         size_t scan_end = header_end ? header_end - 2 : length;
         for (size_t start = line_end + 2; start < scan_end;) {
             size_t end = find_crlf(data, start, length), colon = start;
@@ -121,6 +121,9 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
             } else if (header_is(data, start, colon-start, "Transfer-Encoding")) {
                 if (!field.length) return fail(r, HTTP_BAD_REQUEST);
                 has_transfer = 1;
+            } else if (header_is(data, start, colon-start, "Content-Type")) {
+                if (has_type++) return fail(r, HTTP_BAD_REQUEST);
+                r->content_type = field;
             } else if (header_is(data, start, colon-start, "Connection")) {
                 r->connection = field;
             }
@@ -134,6 +137,9 @@ http_parse_result http_parse_request(const unsigned char *data, size_t length,
         http_request_error size_error = header_size_error(line_end, header_end, length);
         if (size_error) return fail(r, size_error);
         if (has_transfer) return fail(r, HTTP_UNSUPPORTED_TRANSFER);
+        if (!has_length && r->method.length == 4 && !memcmp(data + r->method.offset, "POST", 4))
+            return fail(r, HTTP_LENGTH_REQUIRED);
+        r->has_content_length = has_length != 0;
         if (r->content_length > HTTP_BODY_LIMIT) return fail(r, HTTP_BODY_TOO_LARGE);
         r->header_length = header_end;
         r->headers_complete = 1;

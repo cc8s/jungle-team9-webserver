@@ -35,7 +35,7 @@ static void check(const char *method, const char *target, int expected,
                   const unsigned char *body, size_t body_length)
 {
     char wire[1024];
-    int n = snprintf(wire, sizeof(wire), "%s %s HTTP/1.1\r\nHost: x\r\n\r\n", method, target);
+    int n = snprintf(wire, sizeof(wire), "%s %s HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n", method, target);
     response_job job = {0};
     job.buffer.data = (unsigned char *)wire;
     job.buffer.length = (size_t)n;
@@ -68,7 +68,7 @@ static void check(const char *method, const char *target, int expected,
     char *length_header = strstr((char *)output, "Content-Length: ");
     assert(length_header && strstr((char *)output, "Connection: close\r\n"));
     assert(strtoull(length_header + 16, NULL, 10) == used-header_length);
-    if (expected == 405) assert(strstr((char *)output, "Allow: GET\r\n"));
+    if (expected == 405) assert(strstr((char *)output, strstr(target,"/api/") ? "Allow: POST\r\n" : "Allow: GET\r\n"));
     if (expected == 200) {
         assert(used-header_length == body_length);
         assert(!memcmp(output+header_length, body, body_length));
@@ -138,11 +138,12 @@ int main(void)
     check("GET", "/%2e%2e/secret", 403, NULL, 0);
     check("GET", "/%00", 400, NULL, 0);
     check("GET", "/%z0", 400, NULL, 0);
-    check("POST", "/", 405, NULL, 0);
+    check("POST", "/", 404, NULL, 0);
+    check("GET", "/api/users", 405, NULL, 0);
 
     /* Each A error is converted into the agreed HTTP status. */
     const struct { http_request_error error; int status; } cases[] = {
-        {HTTP_BAD_REQUEST,400}, {HTTP_LINE_TOO_LONG,414}, {HTTP_HEADERS_TOO_LARGE,431},
+        {HTTP_LENGTH_REQUIRED,411}, {HTTP_BAD_REQUEST,400}, {HTTP_LINE_TOO_LONG,414}, {HTTP_HEADERS_TOO_LARGE,431},
         {HTTP_BODY_TOO_LARGE,413}, {HTTP_UNSUPPORTED_TRANSFER,501},
         {HTTP_UNSUPPORTED_VERSION,505}, {HTTP_BODY_TIMEOUT,408}, {HTTP_HEADER_TIMEOUT,408}, {HTTP_NO_MEMORY,500}
     };

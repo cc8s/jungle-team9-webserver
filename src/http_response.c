@@ -1,4 +1,6 @@
 #include "http_response.h"
+#include "http_post.h"
+#include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -37,6 +39,9 @@ static const char *reason(int status)
 {
     switch (status) {
     case 200: return "OK";
+    case 201: return "Created";
+    case 411: return "Length Required";
+    case 415: return "Unsupported Media Type";
     case 400: return "Bad Request";
     case 403: return "Forbidden";
     case 404: return "Not Found";
@@ -58,6 +63,7 @@ static int request_status(http_request_error error)
     case HTTP_LINE_TOO_LONG: return 414;
     case HTTP_HEADERS_TOO_LARGE: return 431;
     case HTTP_BODY_TOO_LARGE: return 413;
+    case HTTP_LENGTH_REQUIRED: return 411;
     case HTTP_UNSUPPORTED_TRANSFER: return 501;
     case HTTP_UNSUPPORTED_VERSION: return 505;
     case HTTP_HEADER_TIMEOUT: case HTTP_BODY_TIMEOUT: return 408;
@@ -66,14 +72,17 @@ static int request_status(http_request_error error)
     }
 }
 
-static int send_headers(int fd, int status, const char *mime, uintmax_t length,
+static int send_headers(int fd, int status, const char *mime, uintmax_t length, const char *allow,
                         int64_t *deadline)
 {
     char header[512];
     int n = snprintf(header, sizeof(header),
-        "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ju\r\nConnection: close\r\n%s\r\n",
-        status, reason(status), mime, length, status == 405 ? "Allow: GET\r\n" : "");
-    if (n < 0 || (size_t)n >= sizeof(header)) return -1;
+                     "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ju\r\nConnection: "
+                     "close\r\n%s%s%s\r\n",
+                     status, reason(status), mime, length, allow ? "Allow: " : "",
+                     allow ? allow : "", allow ? "\r\n" : "");
+    if (n < 0 || (size_t)n >= sizeof(header))
+        return -1;
     return send_all(fd, header, (size_t)n, deadline);
 }
 
@@ -81,7 +90,7 @@ static int send_error(int fd, int status, int64_t *deadline)
 {
     char body[128];
     int n = snprintf(body, sizeof(body), "%d %s\n", status, reason(status));
-    if (send_headers(fd, status, "text/plain; charset=utf-8", (size_t)n, deadline)) return -1;
+    if (send_headers(fd, status, "text/plain; charset=utf-8", (size_t)n, status == 405 ? "GET" : NULL, deadline)) return -1;
     return send_all(fd, body, (size_t)n, deadline);
 }
 
@@ -181,47 +190,107 @@ static int field_in_buffer(http_field field, size_t length)
     return field.offset <= length && field.length <= length - field.offset;
 }
 
+static int send_json_response(int fd, post_response *response, const char *allow, int64_t *deadline)
+{
+    int result = send_headers(fd, response->status, "application/json", response->body.length,
+                              allow, deadline);
+    if (!result)
+        result = send_all(fd, response->body.data, response->body.length, deadline);
+    free(response->body.data);
+    return result;
+}
+
+static int json_error(int fd, int status, const char *allow, int64_t *deadline)
+{
+    post_response response = {0};
+    if (post_error(&response, status, "request_error", reason(status))) {
+        free(response.body.data);
+        return -1;
+    }
+    return send_json_response(fd, &response, allow, deadline);
+}
+
+static int is_post(const http_buffer *buffer, const http_request *request)
+{
+    return buffer && buffer->data && field_in_buffer(request->method, buffer->length) &&
+           request->method.length == 4 && !memcmp(buffer->data + request->method.offset, "POST", 4);
+}
+
 int http_send_response(int fd, const http_buffer *buffer, const http_request *request)
 {
     int64_t now = http_now_ms();
-    if (now < 0) return -1;
+    if (now < 0)
+        return -1;
     int64_t deadline = now + 5000;
-    if (!request) return send_error(fd, 500, &deadline);
+    if (!request)
+        return send_error(fd, 500, &deadline);
     int status = request_status(request->error);
-    if (status != 200) return send_error(fd, status, &deadline);
+    int post = is_post(buffer, request);
+    if (status != 200)
+        return post ? json_error(fd, status, NULL, &deadline) : send_error(fd, status, &deadline);
     /* Error responses above do not require a receive buffer. */
-    if (!buffer || !buffer->data ||
-        !field_in_buffer(request->method, buffer->length) ||
+    if (!buffer || !buffer->data || !field_in_buffer(request->method, buffer->length) ||
         !field_in_buffer(request->target, buffer->length) ||
         !field_in_buffer(request->version, buffer->length) ||
         !field_in_buffer(request->host, buffer->length) ||
         !field_in_buffer(request->connection, buffer->length) ||
-        !request->method.length || !request->target.length)
-        return send_error(fd, 500, &deadline);
+        !field_in_buffer(request->content_type, buffer->length) || !request->method.length ||
+        !request->target.length)
+        return post ? json_error(fd, 500, NULL, &deadline) : send_error(fd, 500, &deadline);
     if (request->target.length >= HTTP_LINE_LIMIT)
-        return send_error(fd, 414, &deadline);
-    if (request->method.length != 3 || memcmp(buffer->data + request->method.offset, "GET", 3)){
-        return send_error(fd, 405, &deadline);
-    }
+        return post ? json_error(fd, 414, NULL, &deadline) : send_error(fd, 414, &deadline);
     char path[HTTP_LINE_LIMIT + 1];
-    status = decode_path(buffer->data + request->target.offset, request->target.length, path, sizeof(path));
-    if (status) return send_error(fd, status, &deadline);
+    status = decode_path(buffer->data + request->target.offset, request->target.length, path,
+                         sizeof(path));
+    if (status)
+        return post ? json_error(fd, status, NULL, &deadline) : send_error(fd, status, &deadline);
+    if (post) {
+        if (!request->has_content_length)
+            return json_error(fd, 411, NULL, &deadline);
+        if (request->header_length > buffer->length ||
+            request->content_length > buffer->length - request->header_length)
+            return json_error(fd, 500, NULL, &deadline);
+        post_response response = {0};
+        int error = post_prepare(
+            path, buffer->data + request->header_length, request->content_length,
+            buffer->data + request->content_type.offset, request->content_type.length, &response);
+        if (error) {
+            free(response.body.data);
+            return json_error(fd, 500, NULL, &deadline);
+        }
+        return send_json_response(fd, &response, NULL, &deadline);
+    }
+    if (post_is_route(path))
+        return json_error(fd, 405, "POST", &deadline);
+    if (request->method.length != 3 || memcmp(buffer->data + request->method.offset, "GET", 3))
+        return send_error(fd, 405, &deadline);
     const char *mime = get_mime_type(path);
     int file = open_static(path, &status);
-    if (file < 0) return send_error(fd, status, &deadline);
+    if (file < 0)
+        return send_error(fd, status, &deadline);
     struct stat st;
-    if (fstat(file, &st) < 0) status = 500;
-    else if (!S_ISREG(st.st_mode)) status = 403;
-    else if (st.st_size < 0) status = 500;
-    if (status != 0) { close(file); return send_error(fd, status, &deadline); }
-    int result = send_headers(fd, 200, mime, (uintmax_t)st.st_size, &deadline);
+    if (fstat(file, &st) < 0)
+        status = 500;
+    else if (!S_ISREG(st.st_mode))
+        status = 403;
+    else if (st.st_size < 0)
+        status = 500;
+    if (status != 0) {
+        close(file);
+        return send_error(fd, status, &deadline);
+    }
+    int result = send_headers(fd, 200, mime, (uintmax_t)st.st_size, NULL, &deadline);
     off_t left = st.st_size;
     unsigned char chunk[16384];
     while (!result && left > 0) {
         size_t count = left > (off_t)sizeof(chunk) ? sizeof(chunk) : (size_t)left;
         ssize_t n = read(file, chunk, count);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) { result = -1; break; }
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0) {
+            result = -1;
+            break;
+        }
         result = send_all(fd, chunk, (size_t)n, &deadline);
         left -= n;
     }
