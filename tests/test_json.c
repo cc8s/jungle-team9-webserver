@@ -82,6 +82,19 @@ int main(void)
         expect(out.data, total == 10000 ? 0 : 413);
         free(out.data);
     }
+    const char *segments[] = {"a=1&", "&a=1", "&&a=1&&", "a=1&&b=2", "&", "&&", "foo", "=value", "a=b=c", "x=%26%3D"};
+    const char *expected[] = {"{\"a\":\"1\"}", "{\"a\":\"1\"}", "{\"a\":\"1\"}",
+        "{\"a\":\"1\",\"b\":\"2\"}", "{}", "{}", "{\"foo\":\"\"}", "{\"\":\"value\"}",
+        "{\"a\":\"b=c\"}", "{\"x\":\"&=\"}"};
+    for (size_t i = 0; i < sizeof(segments) / sizeof(segments[0]); i++) {
+        assert(form_parse((const unsigned char *)segments[i], strlen(segments[i]), &v) == 0);
+        out = (json_output){0};
+        assert(json_write(&out, v) == 0);
+        assert(out.length == strlen(expected[i]) && !memcmp(out.data, expected[i], out.length));
+        json_free(v);
+        free(out.data);
+    }
+    assert(form_parse((const unsigned char *)"&a=1&&a=2&", 10, &v) == 400);
     const char *form = "name=%ED%99%8D%EA%B8%B8%EB%8F%99&note=a+b";
     assert(!form_parse((unsigned char *)form, strlen(form), &v));
     assert(json_member(v, "name")->text.length == 9);
@@ -101,7 +114,7 @@ int main(void)
         out = (json_output){0};
         for (int i = 0; i < n; i++) {
             char item[30];
-            int len = snprintf(item, sizeof(item), "%sk%d=v", i ? "&" : "", i);
+            int len = snprintf(item, sizeof(item), "&&k%d=v&", i);
             json_append(&out, item, (size_t)len);
         }
         assert(form_parse((unsigned char *)out.data, out.length, &v) == (n == 100 ? 0 : 413));

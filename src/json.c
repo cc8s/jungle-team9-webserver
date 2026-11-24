@@ -494,13 +494,17 @@ int form_parse(const unsigned char *data, size_t length, json_value **out)
     size_t count = 0;
     int error = 0;
     for (size_t start = 0; start < length;) {
+        size_t end = start;
+        while (end < length && data[end] != '&')
+            end++;
+        if (end == start) {
+            start = end + 1;
+            continue;
+        }
         if (++count > 100) {
             error = 413;
             break;
         }
-        size_t end = start;
-        while (end < length && data[end] != '&')
-            end++;
         size_t equal = start;
         while (equal < end && data[equal] != '=')
             equal++;

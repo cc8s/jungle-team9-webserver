@@ -155,6 +155,8 @@ int main(void)
     expect("/api/form", "name=hello+world&age=25", "application/x-www-form-urlencoded", 200);
     expect("/api/form", "name=a%00b", "application/x-www-form-urlencoded", 400);
     expect("/api/form", "%00=value", "application/x-www-form-urlencoded", 400);
+    expect("/api/form", "&&", "application/x-www-form-urlencoded", 200);
+    expect("/api/form", "&a=1&&foo&", "application/x-www-form-urlencoded", 200);
     expect("/api/form", "name=a&name=b", "application/x-www-form-urlencoded", 400);
     expect("/unknown", "", "application/json", 404);
     const char *paths[] = {"/api/users", "/api/form", "/api/upload"};
