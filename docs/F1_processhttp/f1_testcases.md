@@ -46,7 +46,7 @@
 | 전송 | [test_http_response.c](../../tests/test_http_response.c) · `main` | 상대가 읽지 않으면 실제 5초 쓰기 타임아웃, O_NONBLOCK 유지 | 통과 — 자동 |
 | 전송 | [test_http_response.c](../../tests/test_http_response.c) · `main` | 상대 연결 종료 후 전송 실패 반환 | 통과 — 자동 |
 | 전송 | [test_transfer_timing.c](../../tests/test_transfer_timing.c) | 실제 socketpair 부분 송신·상대 drain과 모사 시간으로 양수 send 기한 갱신, EAGAIN 무갱신·최종 만료 검증 | 통과 — 제어된 I/O·시계 |
-| 전송 | — | poll/recv/send/read의 EINTR 및 I/O 오류 강제 주입, 전송 도중 파일 읽기 실패 | 미실행 |
+| 전송 | [test_fault_recovery.c](../../tests/test_fault_recovery.c) | poll/recv/send/read의 EINTR 재시도·I/O 실패 및 헤더/부분 본문 전송 후 read 실패 시 추가 응답 없음 | 통과 — 오류 주입 |
 | JSON 파서 | [test_json.c](../../tests/test_json.c) | 객체·배열·숫자·불리언·null 및 한글을 해석·재직렬화, 큰 정수 원문 보존 | 통과 — 자동 |
 | JSON 파서 | [test_json.c](../../tests/test_json.c) | 문자열 NUL·surrogate pair 보존, 잘못된 UTF-8·고립 surrogate 거절 | 통과 — 자동 |
 | JSON 파서 | [test_json.c](../../tests/test_json.c) · `expect` | 잘못된 숫자·이스케이프·후행 데이터·후행 쉼표·빈 입력 400 | 통과 — 자동 |
@@ -75,14 +75,14 @@
 | JSON 응답 | [test_post_boundaries.c](../../tests/test_post_boundaries.c) | 따옴표·역슬래시·0x00~0x1F·한글 재파싱 보존, POST 성공·오류의 JSON Content-Type·실제 본문 길이 검증 | 통과 — 자동 |
 | 업로드 저장 | [test_post.c](../../tests/test_post.c) · `test_upload_inputs` | photo.jpg·image/png 메타데이터와 다른 00 01 02 원본을 변환 없이 보존 | 통과 — 자동 |
 | 업로드 저장 | [test_post.c](../../tests/test_post.c) · `test_upload_inputs` | 절대 경로·기존 파일명·NUL 메타데이터 보존 및 기존 파일 불변 | 통과 — 자동 |
-| 업로드 저장 | — | 고정 시각·시계 변경·기존 ID 충돌을 주입해 충돌 재시도와 덮어쓰기 금지 확인 | 미실행 |
-| 업로드 저장 | — | .bin 성공 후 .json 생성·쓰기·close·fchmod 실패를 주입해 자신의 파일 쌍만 삭제 | 미실행 |
+| 업로드 저장 | [test_fault_recovery.c](../../tests/test_fault_recovery.c) | 고정·역행 시각 ID 비중복 및 실제 기존 bin/json 이름 충돌 후 재시도·기존 바이트 보존 | 통과 — 오류 주입 |
+| 업로드 저장 | [test_fault_recovery.c](../../tests/test_fault_recovery.c) | bin/json 생성·쓰기·close·fchmod 실패 주입 시 자기 파일 정리, 기존 파일·충돌 파일 보존 | 통과 — 오류 주입 |
 | 업로드 저장 | [test_transfer_timing.c](../../tests/test_transfer_timing.c) | 저장 후 첫 헤더·부분 헤더·첫 본문·부분 본문 send 실패 주입: 파일 쌍 보존·추가 응답 없음 | 통과 — 제어된 I/O·시계 |
 | 업로드 공개 범위 | [test_http_response.c](../../tests/test_http_response.c) · `test_get_routes` | 실제 저장된 .bin/.json의 직접 GET 404, 원문·인코딩 상위 경로 및 심볼릭 링크 GET 403 | 통과 — 자동 |
 | 자원·안정성 | 기존 전체 자동 테스트 + ASan/UBSan | 기존 수신·응답·JSON·POST 테스트에서 메모리 접근·정의되지 않은 동작 오류 없음, GET 분리 후 회귀 통과 | 통과 — macOS |
-| 자원·안정성 | — | 장기 반복 요청의 FD·메모리 누수 계측 및 LeakSanitizer 검사 | 미실행 |
-| 자원·안정성 | — | 프로세스 강제 종료 중 업로드 파일 쌍의 일관성·디스크 동기화 | 미실행 |
-| 플랫폼 | — | Linux 실행과 실제 TCP 느린 수신자 검증 | 미실행 |
+| 자원·안정성 | [test_stability.c](../../tests/test_stability.c) | 4,400회 FD·RSS 계측 및 Linux LeakSanitizer 통과. 장시간 운용·작은 누수 부재까지 입증하지 않음 | 부분 검증 — 유한 반복·LSan 통과 |
+| 자원·안정성 | [test_stability.c](../../tests/test_stability.c) · `test_kill_observation` | SIGKILL 후 부분 bin 2바이트·빈 json 0바이트·0600 잔존 관찰. 파일 쌍 원자성·디스크 동기화는 미보장 | 관찰 완료 — 내구성 미검증 |
+| 플랫폼 | [test_stability.c](../../tests/test_stability.c) 및 Linux Docker 전체 검사 | macOS/Linux에서 실제 loopback TCP 2MiB 느린 수신 바이트 일치 및 무수신 전송 실패, Linux ASan/LSan/UBSan 전체 통과 | 통과 — 실제 TCP·Linux |
 | 빌드 파이프라인 | [test_smoke.c](../../tests/test_smoke.c) | 테스트 실행 파이프라인 확인. HTTP 기능 검증으로 간주하지 않음 | 통과 — 자동 |
 
 실행 방법:
@@ -163,3 +163,13 @@ make test BUILD=build/f1-host-sanitize TBIN=tests/bin/f1-host-sanitize \
 [상세 입력·기대 결과·실행 기록](f1_category5_results.md)에 11개 시나리오(수신 4·전송 3·저장 후 응답 실패 4)를 기록했다. 실제 제품 소스와 socketpair 바이트·디스크 저장을 사용하고, 단조 시계·poll 대기·부분 send 및 EAGAIN/EPIPE만 테스트에서 제어한다. 기한 경과 후 성공 수신 바이트 반영, 양수 send에서만 5초 갱신, 전송 실패 후 저장 파일 보존과 추가 응답 부재를 확인했다.
 
 단독·일반 전체·ASan/UBSan 전체 테스트 및 Python 도구 경계 검사가 통과했다. 제품 변경은 없다. 실제 TCP·실시간 느린 수신자·Linux·LeakSanitizer 검증과는 구분하며 해당 미실행 항목은 유지한다. 신규 C 테스트는 `make test`에서 자동 실행한다.
+
+## 카테고리 6·7 병렬 검증 (2026-11-24)
+
+- [카테고리 6 상세](f1_category6_results.md): 오류 주입·저장 복구 26개 시나리오. 실제 socketpair·파일을 사용하고 syscall 반환 오류를 제어한다. close 오류는 FD를 실제 닫은 뒤 EIO를 보고하는 모델이다. 단독·macOS 일반 전체·ASan/UBSan 전체 통과.
+- [카테고리 7 상세](f1_category7_results.md): 4,400회 요청, FD·RSS 표본, 실제 loopback TCP, SIGKILL 관찰. 최종 동일 소스로 macOS 일반·ASan/UBSan과 Linux 일반·ASan/LSan/UBSan 전체 검사를 통과했다. Linux는 기존 Docker 이미지를 사용했고 LSan 활성 여부는 의도적 17바이트 누수 검출로 확인했다.
+- 일반 실행 RSS는 워밍업 이후 최대 증가 0, FD 11개 표본 모두 5였다. ASan RSS는 약 40~41MiB 증가했으며 격리 큐를 감안한 예산 내였다. 이는 유한 실행 결과이며 장시간 누수 부재의 증명이 아니다.
+- 실제 TCP 2MiB 전송 성공은 macOS 약 10.4초, Linux 약 13.5초였다. 읽지 않는 상대의 8MiB 전송은 약 5.0~5.4초 뒤 실패했다. 제품 main 전체가 아닌 전용 listener에서 제품 수신·응답 함수를 실행했다.
+- 강제 종료 후 부분 bin과 빈 json이 남았다. 이를 원자성·fsync 내구성 통과로 표시하지 않는다. 작은 TCP 버퍼에서의 초기 전송 실패와 최종 조건 조정 이력은 상세 문서에 남겼다.
+
+새 C 테스트는 `make test`에 자동 포함된다. 네 최종 전체 검사 모두 Python 업로드 도구 경계 검사까지 통과했다. Linux에서 기존 test_post의 snprintf 경로에 format-truncation 경고가 있었으며 실행 실패는 없었다. 제품 코드·정책은 변경하지 않았다.

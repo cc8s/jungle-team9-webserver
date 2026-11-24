@@ -252,3 +252,9 @@ test_host_policy는 정상·거절 Host와 요청 라인 표본을 파싱한다.
 ## 카테고리 5 테스트 흐름 (2026-11-24)
 
 test_transfer_timing은 실제 수신·응답 소스를 테스트 번역 단위에 포함해 시계와 I/O 경계만 제어한다. 수신은 실제 recv 성공 → 모사 시간 이동 → buffer.length 누적 → 재파싱 → 완료 또는 재대기 타임아웃으로 흐른다. 전송은 실제 준비 상태 poll·모사 대기 → 부분 send → 양수 결과에서 deadline 갱신을 확인한다. 업로드는 실제 post_prepare/store_upload 완료 → 헤더·본문의 지정 단계에서 send 실패 → 반환 -1 → 실제 수신 바이트·송신 호출 수·남은 파일 쌍과 권한 검증 순서다. 제품 함수와 자원 소유권은 바꾸지 않았다.
+
+## 카테고리 6·7 테스트 흐름 (2026-11-24)
+
+test_fault_recovery는 실제 수신·GET·POST·응답 소스를 테스트 번역 단위에 포함하고 syscall 래퍼로 EINTR·I/O 오류·실제 EEXIST를 주입한다. 수신·전송 재시도, 부분 파일 응답 중단, 업로드 cleanup 이후 기존 파일 내용·신규 파일 개수·FD 닫힘을 확인한다. 고정/역행 CLOCK_REALTIME과 충돌 직전 sentinel 생성은 별도 분기다.
+
+test_stability의 반복 요청은 socketpair → http_receive_request → http_send_response → free/close/생성 파일 삭제 순서로 4,400회 처리하고 FD·RSS를 계측한다. TCP는 포트 0 loopback listener → fork/accept → 제품 수신·응답 함수와 실제 느린 읽기/무수신 상대를 사용한다. 강제 종료는 실제 업로드 write 일부 성공 → SIGKILL → 부모의 잔존 파일 크기·권한 관찰 → 테스트 파일 정리로 흐른다. 제품 main이나 자원 소유권은 변경하지 않았다.
