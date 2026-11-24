@@ -211,3 +211,9 @@ POST 확장에서 추가하는 상태는 201(저장 성공), 411(명시적 길�
 - src/http_request.c: Content-Type 필드와 Content-Length 존재 여부 저장, 중복 타입 400과 POST 길이 누락 411.
 - src/http_response.c: 경로별 메서드 분기와 공통 send_headers/send_all 재사용. POST 오류는 JSON으로 반환하고 GET 기존 처리는 유지한다.
 - 저장 도중 프로세스 강제 종료·전원 장애에 대한 파일 쌍 원자성과 fsync 내구성은 보장하지 않는다. 일반 오류 경로에서는 생성한 파일 쌍을 정리한다.
+
+## GET 소스 분리
+
+정적 파일 준비·읽기를 src/http_get.c로 옮긴다. get_prepare는 파일 열기·종류·크기·MIME을 준비하고, get_send_body는 파일을 16 KiB씩 읽어 공통 http_send_all로 전송한다. http_response.c는 경로·메서드 분기, 상태·헤더·오류 응답과 공통 전송 루프를 유지한다.
+
+성공한 get_prepare가 연 파일 FD는 호출자가 소유한다. http_send_response는 헤더 또는 본문 전송이 실패해도 파일 FD를 닫는다. 경로 처리·www 루트·MIME·오류 코드·타임아웃 정책은 변경하지 않는다. post_prepare 및 JSON 응답 흐름도 유지한다.

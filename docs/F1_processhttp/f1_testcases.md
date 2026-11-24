@@ -213,3 +213,9 @@ python3 tests/tools/upload_fixture.py photo.png --url http://localhost:8000/api/
 ```
 
 도구는 줄바꿈 없는 일반 Base64와 패딩을 생성하며 JSON 전체 1 MiB 상한을 먼저 검사한다. 서버는 파일 저장을 실제로 수행하므로 도구가 검증 후 업로드 파일을 자동 삭제하지 않는다.
+
+## GET 소스 분리 회귀 검증
+
+기존 응답 테스트를 그대로 사용해 정상 HTML·바이너리 PNG, 쿼리·디코딩, 403/404, 심볼릭 링크·경로 이탈 차단, 전송 5초 제한·연결 종료를 검증한다. POST/JSON/form 테스트도 함께 실행해 공통 전송 함수 변경의 영향을 확인한다.
+
+make, make test, 별도 build/get-split-sanitize의 ASan/UBSan 전체 테스트를 실행했고 모두 통과했다. 기능 추가가 아닌 모듈 분리이므로 기존 테스트를 재사용했다.

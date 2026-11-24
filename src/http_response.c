@@ -1,19 +1,17 @@
 #include "http_response.h"
 #include "http_post.h"
+#include "http_get.h"
 #include <stdlib.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <inttypes.h>
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 /* Progress means bytes accepted into the local socket send buffer. */
-static int send_all(int fd, const void *data, size_t length, int64_t *deadline)
+int http_send_all(int fd, const void *data, size_t length, int64_t *deadline)
 {
     const unsigned char *p = data;
     while (length) {
@@ -83,7 +81,7 @@ static int send_headers(int fd, int status, const char *mime, uintmax_t length, 
                      allow ? allow : "", allow ? "\r\n" : "");
     if (n < 0 || (size_t)n >= sizeof(header))
         return -1;
-    return send_all(fd, header, (size_t)n, deadline);
+    return http_send_all(fd, header, (size_t)n, deadline);
 }
 
 static int send_error(int fd, int status, int64_t *deadline)
@@ -91,7 +89,7 @@ static int send_error(int fd, int status, int64_t *deadline)
     char body[128];
     int n = snprintf(body, sizeof(body), "%d %s\n", status, reason(status));
     if (send_headers(fd, status, "text/plain; charset=utf-8", (size_t)n, status == 405 ? "GET" : NULL, deadline)) return -1;
-    return send_all(fd, body, (size_t)n, deadline);
+    return http_send_all(fd, body, (size_t)n, deadline);
 }
 
 static int hex(unsigned char c)
@@ -135,56 +133,6 @@ static int decode_path(const unsigned char *target, size_t length, char *path,
     return 0;
 }
 
-static const char *get_mime_type(const char *path)
-{
-    static const struct { const char *ext, *mime; } types[] = {
-        {".html", "text/html"}, {".css", "text/css"}, {".js", "text/javascript"},
-        {".json", "application/json"}, {".png", "image/png"},
-        {".jpg", "image/jpeg"}, {".jpeg", "image/jpeg"}
-    };
-    const char *ext = strrchr(path, '.');
-    for (size_t i = 0; ext && i < sizeof(types)/sizeof(types[0]); i++)
-        if (!strcasecmp(ext, types[i].ext)) return types[i].mime;
-    return "application/octet-stream";
-}
-
-static int file_status(int error)
-{
-    if (error == ENOENT) return 404;
-    if (error == EACCES || error == EPERM || error == ELOOP || error == ENOTDIR) return 403;
-    return 500;
-}
-
-/* Walk from www one component at a time; never follow a symlink. */
-static int open_static(char *path, int *status)
-{
-    int directory = open("www", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    if (directory < 0) { *status = 500; return -1; }
-    char *part = path;
-    while (*part == '/') part++;
-    while (*part) {
-        char *slash = strchr(part, '/');
-        if (slash) *slash = 0;
-        struct stat st;
-        if (fstatat(directory, part, &st, AT_SYMLINK_NOFOLLOW) < 0) {
-            *status = file_status(errno); close(directory); return -1;
-        }
-        if (S_ISLNK(st.st_mode)) { *status = 403; close(directory); return -1; }
-        int next = openat(directory, part, O_RDONLY | O_NOFOLLOW | O_NONBLOCK |
-                          (slash ? O_DIRECTORY : 0));
-        int saved = errno;
-        close(directory);
-        if (next < 0) { *status = file_status(saved); return -1; }
-        directory = next;
-        if (!slash) return directory;
-        part = slash + 1;
-        while (*part == '/') part++;
-    }
-    *status = 403;
-    close(directory);
-    return -1;
-}
-
 static int field_in_buffer(http_field field, size_t length)
 {
     return field.offset <= length && field.length <= length - field.offset;
@@ -195,7 +143,7 @@ static int send_json_response(int fd, post_response *response, const char *allow
     int result = send_headers(fd, response->status, "application/json", response->body.length,
                               allow, deadline);
     if (!result)
-        result = send_all(fd, response->body.data, response->body.length, deadline);
+        result = http_send_all(fd, response->body.data, response->body.length, deadline);
     free(response->body.data);
     return result;
 }
@@ -264,36 +212,13 @@ int http_send_response(int fd, const http_buffer *buffer, const http_request *re
         return json_error(fd, 405, "POST", &deadline);
     if (request->method.length != 3 || memcmp(buffer->data + request->method.offset, "GET", 3))
         return send_error(fd, 405, &deadline);
-    const char *mime = get_mime_type(path);
-    int file = open_static(path, &status);
-    if (file < 0)
+    get_response response = {.file = -1};
+    status = get_prepare(path, &response);
+    if (status != 200)
         return send_error(fd, status, &deadline);
-    struct stat st;
-    if (fstat(file, &st) < 0)
-        status = 500;
-    else if (!S_ISREG(st.st_mode))
-        status = 403;
-    else if (st.st_size < 0)
-        status = 500;
-    if (status != 0) {
-        close(file);
-        return send_error(fd, status, &deadline);
-    }
-    int result = send_headers(fd, 200, mime, (uintmax_t)st.st_size, NULL, &deadline);
-    off_t left = st.st_size;
-    unsigned char chunk[16384];
-    while (!result && left > 0) {
-        size_t count = left > (off_t)sizeof(chunk) ? sizeof(chunk) : (size_t)left;
-        ssize_t n = read(file, chunk, count);
-        if (n < 0 && errno == EINTR)
-            continue;
-        if (n <= 0) {
-            result = -1;
-            break;
-        }
-        result = send_all(fd, chunk, (size_t)n, &deadline);
-        left -= n;
-    }
-    close(file);
+    int result = send_headers(fd, 200, response.mime, response.length, NULL, &deadline);
+    if (!result)
+        result = get_send_body(fd, &response, &deadline);
+    close(response.file);
     return result;
 }

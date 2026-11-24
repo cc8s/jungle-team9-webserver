@@ -87,9 +87,9 @@ main
   B: http_send_response
     request_status → A 오류이면 send_error
     GET 검사 → 그 외 send_error(405)
-    decode_path → get_mime_type → open_static → fstat
-    send_headers → send_all
-    파일 read → send_all 반복
+    decode_path → get_prepare (http_get.c)
+    send_headers
+    get_send_body (http_get.c) → http_send_all 반복
     close(file)
   free(buffer.data)
   close(conn_fd)
@@ -99,7 +99,7 @@ main
 - `decode_path`: 쿼리를 먼저 분리하고 한 번 디코딩한 경로를 검증한다.
 - `open_static`: www부터 디렉토리 FD를 이동하며 파일을 연다. 실패 시 중간 FD를 정리한다.
 - `send_headers`/`send_error`: 상태 라인·표준 헤더·오류 본문을 구성한다.
-- `send_all`: 부분 전송, EINTR/EAGAIN, 진행 없는 5초 제한을 처리한다.
+- `http_send_all`: 부분 전송, EINTR/EAGAIN, 진행 없는 5초 제한을 처리한다.
 - `get_mime_type`/`reason`/`request_status`/`file_status`: MIME·상태 문구·오류 변환 보조 함수다.
 
 main의 기존 socket/bind/listen/accept 흐름과 포트 8000은 유지한다. B는 수신 버퍼와 연결 FD의 소유권을 가져가지 않는다.
@@ -163,7 +163,7 @@ main: accept → 기존 논블로킹 설정
           두 파일 모두 0400 설정 → FD 정리
           저장 성공 → 201 + 식별자·원본 파일명·크기 JSON
           중간 실패 → 이번 요청의 불완전 파일 쌍 정리 → 오류 응답
-    공통 send_headers → send_all
+    공통 send_headers → http_send_all
   응답·파싱 임시 자원 정리
   기존 main: free(buffer.data) → close(conn_fd)
 ```
@@ -175,7 +175,7 @@ main: accept → 기존 논블로킹 설정
 - http_send_response는 GET 정적 처리와 POST 처리를 분기한다. 기존 GET의 파일 접근 흐름은 유지한다.
 - JSON 파서는 직접 구현해 사용자 JSON과 업로드 JSON에서 공유한다. 폼 파서는 별도이며 결과 JSON 직렬화는 공유한다.
 - 업로드 처리는 Base64 디코딩, 고유 파일 생성, 전체 바이트 쓰기, 실패 파일 삭제를 담당한다. open_static으로 업로드 경로를 만들지 않는다.
-- send_headers는 상태·MIME·본문 바이트 수와 경로별 Allow를 받도록 확장한다. JSON 결과는 기존 send_all로 전송한다.
+- send_headers는 상태·MIME·본문 바이트 수와 경로별 Allow를 받도록 확장한다. JSON 결과는 기존 http_send_all로 전송한다.
 - send_error는 기존 GET 오류 처리를 유지하면서 POST 오류 JSON을 지원한다. A에서 본문 수신 전에 발생하는 오류도 해당 정책을 연결한다.
 
 ### 버퍼와 파일 소유권
@@ -208,8 +208,25 @@ http_send_response
       UTC ID → openat으로 .bin/.json 예약 → write_file
       metadata JSON → fchmod(0400) → close
     JSON 응답 메모리 준비
-  send_json_response → send_headers → send_all → 응답 메모리 해제
+  send_json_response → send_headers → http_send_all → 응답 메모리 해제
 main → 수신 버퍼 free → 연결 close
 ```
 
 json_free는 파싱 트리와 디코딩한 문자열을 회수한다. post_prepare는 트리를 해제하며, store_upload는 디코딩 바이트와 분리된 파일 자원을 관리한다. GET/POST의 전송 루프와 5초 진행 제한은 공유한다.
+
+## GET 분리 후 현재 흐름
+
+```text
+http_send_response (http_response.c)
+  파싱 오류·범위 검사 → 경로 디코딩 → 메서드·API 라우팅
+  POST → post_prepare (http_post.c) → send_json_response
+  GET 정적 경로
+    get_prepare (http_get.c)
+      get_mime_type → open_static → fstat
+    send_headers (http_response.c)
+    get_send_body (http_get.c)
+      read(최대 16 KiB) → http_send_all (http_response.c) 반복
+    close(response.file)
+```
+
+get_response는 열린 파일 FD, MIME, 본문 길이를 전달한다. get_prepare의 path는 검증된 경로이며 내부 탐색에서 수정될 수 있다. get_send_body는 파일 FD를 닫지 않고, 공통 호출자가 성공·실패 모두 정리한다. 공통 전송 루프는 기존 send_all에서 http_send_all로 이름을 바꾸고 GET 모듈에서도 호출할 수 있게 했다.
