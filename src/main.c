@@ -6,6 +6,7 @@
 #include <arpa/inet.h>  // inet_pton, inet_ntop: IP 주소 변환
 #include <unistd.h>     // read, write, close
 #include <fcntl.h>      // open, blocking, nonblocking
+#include <signal.h>
 #include <stdio.h>      // printf, perror
 #include <stdlib.h>     // exit, EXIT_FAILURE
 #include <string.h>     // memset, strlen
@@ -21,11 +22,15 @@
 // void client_error(int fd, int *cause, char *errnum, char *shortmsg, char *longmsg);
 
 int main(int argc, char **argv){
-    // TODO:
     // 0. init socket descriptor 
-    int sock_fd = socket(AF_INET, SOCK_STREAM, 0); // sock_addr? 
+    int sock_fd = socket(AF_INET, SOCK_STREAM, 0); 
     if (sock_fd == -1){
         perror("socket error");
+        return EXIT_FAILURE;
+    }
+
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        perror("signal");
         return EXIT_FAILURE;
     }
 
@@ -56,7 +61,7 @@ int main(int argc, char **argv){
         return EXIT_FAILURE;
     }
 
-    // 4. accept
+    // 4. accept : Blocking, Process single request
     while (1) {
         // 기본 블로킹 모드: 연결이 없으면 여기서 기다린다.
         int conn_fd = accept(sock_fd, NULL, NULL);
@@ -97,6 +102,7 @@ int main(int argc, char **argv){
         if (http_send_response(conn_fd, &buffer, &request) < 0)
             fprintf(stderr, "response send failed\n");
         free(buffer.data);
+        
         // 이 처리가 끝난 뒤에만 다음 연결을 accept한다.
 
         close(conn_fd);

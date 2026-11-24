@@ -200,8 +200,9 @@ int http_send_response(int fd, const http_buffer *buffer, const http_request *re
         return send_error(fd, 500, &deadline);
     if (request->target.length >= HTTP_LINE_LIMIT)
         return send_error(fd, 414, &deadline);
-    if (request->method.length != 3 || memcmp(buffer->data + request->method.offset, "GET", 3))
+    if (request->method.length != 3 || memcmp(buffer->data + request->method.offset, "GET", 3)){
         return send_error(fd, 405, &deadline);
+    }
     char path[HTTP_LINE_LIMIT + 1];
     status = decode_path(buffer->data + request->target.offset, request->target.length, path, sizeof(path));
     if (status) return send_error(fd, status, &deadline);
