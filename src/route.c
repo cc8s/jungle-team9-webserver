@@ -1,6 +1,7 @@
 #include "route.h"
 
 #include <ctype.h>
+#include <netdb.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -25,6 +26,46 @@ static int valid_host(const char *s, size_t n)
     return 1;
 }
 
+int backends_parse(const char *list, struct route *r, const char **err)
+{
+    /* "host:port,host:port" 를 쉼표로 나눠 하나씩 */
+    for (const char *p = list; *p != '\0';) {
+        const char *end = strchr(p, ',');
+        size_t n = end ? (size_t)(end - p) : strlen(p);
+        const char *colon = memchr(p, ':', n);
+        char port[16];
+
+        if (colon == NULL || r->nbe == MAX_BACKENDS || !valid_host(p, (size_t)(colon - p))) {
+            *err = "backend must be host:port (letters, digits, . - _ only; at most 8 backends)";
+            return -1;
+        }
+        size_t pl = n - (size_t)(colon - p) - 1;
+        if (pl == 0 || pl >= sizeof(port) || sizeof(r->be[0].port) <= pl) {
+            *err = "backend port must be 1-65535";
+            return -1;
+        }
+        memcpy(port, colon + 1, pl);
+        port[pl] = '\0';
+        if (!valid_port(port)) {
+            *err = "backend port must be 1-65535";
+            return -1;
+        }
+        memcpy(r->be[r->nbe].host, p, (size_t)(colon - p));
+        strcpy(r->be[r->nbe].port, port);
+        r->nbe++;
+        p = end ? end + 1 : p + n;
+        if (end && *p == '\0') { /* "host:80," 처럼 쉼표로 끝남 */
+            *err = "backend list must not end with a comma";
+            return -1;
+        }
+    }
+    if (r->nbe == 0) {
+        *err = "needs at least one backend";
+        return -1;
+    }
+    return 0;
+}
+
 int route_parse(const char *spec, struct route *r, const char **err)
 {
     const char *eq = strchr(spec, '=');
@@ -40,43 +81,7 @@ int route_parse(const char *spec, struct route *r, const char **err)
         return -1;
     }
     memcpy(r->prefix, spec, plen);
-
-    /* "host:port,host:port" 를 쉼표로 나눠 하나씩 */
-    for (const char *p = eq + 1; *p != '\0';) {
-        const char *end = strchr(p, ',');
-        size_t n = end ? (size_t)(end - p) : strlen(p);
-        const char *colon = memchr(p, ':', n);
-        char port[16];
-
-        if (colon == NULL || r->nbe == MAX_BACKENDS || !valid_host(p, (size_t)(colon - p))) {
-            *err = "-R backend must be host:port (letters, digits, . - _ only; at most 8 backends)";
-            return -1;
-        }
-        size_t pl = n - (size_t)(colon - p) - 1;
-        if (pl == 0 || pl >= sizeof(port) || sizeof(r->be[0].port) <= pl) {
-            *err = "-R backend port must be 1-65535";
-            return -1;
-        }
-        memcpy(port, colon + 1, pl);
-        port[pl] = '\0';
-        if (!valid_port(port)) {
-            *err = "-R backend port must be 1-65535";
-            return -1;
-        }
-        memcpy(r->be[r->nbe].host, p, (size_t)(colon - p));
-        strcpy(r->be[r->nbe].port, port);
-        r->nbe++;
-        p = end ? end + 1 : p + n;
-        if (end && *p == '\0') { /* "host:80," 처럼 쉼표로 끝남 */
-            *err = "-R backend list must not end with a comma";
-            return -1;
-        }
-    }
-    if (r->nbe == 0) {
-        *err = "-R needs at least one backend";
-        return -1;
-    }
-    return 0;
+    return backends_parse(eq + 1, r, err);
 }
 
 int route_matches(const struct route *r, const char *uri)
@@ -100,4 +105,27 @@ struct route *route_find(struct route *routes, int n, const char *uri)
 int route_next_start(struct route *r)
 {
     return (int)(r->next++ % (unsigned)r->nbe);
+}
+
+int route_resolve(struct route *routes, int n, const char **err)
+{
+    struct addrinfo hints, *list;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; /* 결과를 하나만 쓰므로 "localhost" 가 ::1 로 먼저 풀려 IPv4 백엔드에 못 닿는 일을 막는다 */
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICSERV;
+    for (int i = 0; i < n; i++) {
+        for (int k = 0; k < routes[i].nbe; k++) {
+            struct backend *b = &routes[i].be[k];
+            if (getaddrinfo(b->host, b->port, &hints, &list) != 0 || list == NULL) {
+                *err = "cannot resolve a -R backend host (IPv4 only)";
+                return -1;
+            }
+            memcpy(&b->addr, list->ai_addr, list->ai_addrlen);
+            b->addrlen = list->ai_addrlen;
+            freeaddrinfo(list);
+        }
+    }
+    return 0;
 }

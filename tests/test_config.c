@@ -46,6 +46,22 @@ int main(void)
     CHECK(PARSE("-p", "8080", "-r", "www", "-R", "/api=host") == -1);
     CHECK(PARSE("-p", "8080", "-r", "www", "-R", "/=h:80") == -1);
 
+    /* L4 중계 -L (D10): -r 없이 쓰고, -r·-R 와는 같이 못 쓰고, -m prefork 도 안 됨 */
+    CHECK(PARSE("-p", "8000", "-L", "127.0.0.1:8081,127.0.0.1:8082") == 0);
+    CHECK(strcmp(cfg.l4, "127.0.0.1:8081,127.0.0.1:8082") == 0 && cfg.root == NULL);
+    CHECK(PARSE("-p", "8000", "-L", "127.0.0.1:8081", "-t", "3", "-w", "2") == 0 && cfg.timeout_sec == 3);
+    CHECK(PARSE("-L", "127.0.0.1:8081") == -1);                                     /* -p 필요 */
+    CHECK(PARSE("-p", "8000", "-L", "bad") == -1);                                 /* 형식 */
+    CHECK(PARSE("-p", "8000", "-L", "h:80", "-r", "www") == -1);                   /* -r 와 같이 못 씀 */
+    CHECK(PARSE("-p", "8000", "-L", "h:80", "-R", "/a=h:81") == -1);               /* -R 와 같이 못 씀 */
+    CHECK(PARSE("-p", "8000", "-L", "h:80", "-m", "prefork") == -1);               /* L4 는 이벤트 루프만 */
+    CHECK(PARSE("-p", "8000", "-L", "h:80", "-m", "epoll") == 0);
+
+    /* 모델: 기본 epoll */
+    CHECK(PARSE("-p", "8080", "-r", "www") == 0 && cfg.model == MODEL_EPOLL);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-m", "prefork") == 0 && cfg.model == MODEL_PREFORK);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-m", "threads") == -1);
+
     /* worker 수: 안 주면 0 (main 이 코어 수로), 1~256 */
     CHECK(PARSE("-p", "8080", "-r", "www") == 0 && cfg.workers == 0);
     CHECK(PARSE("-p", "8080", "-r", "www", "-w", "4") == 0 && cfg.workers == 4);

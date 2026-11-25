@@ -33,30 +33,46 @@ static int send_error(int fd, int status, int head_only)
     return status;
 }
 
-int serve_static(int fd, const char *root_real, const struct request *req)
+int static_open(const char *root_real, const struct request *req, int *fd, off_t *size, const char **type)
 {
-    int head_only = strcmp(req->method, "HEAD") == 0;
-    char path[PATH_MAX], hdr[512], chunk[64 * 1024];
+    char path[PATH_MAX];
     struct stat st;
 
-    int st_code = static_method_status(req->method);
-    if (st_code != 0)
-        return send_error(fd, st_code, head_only);
-    st_code = resolve_path(root_real, req->uri, path, sizeof(path));
-    if (st_code != 0)
-        return send_error(fd, st_code, head_only);
+    int code = static_method_status(req->method);
+    if (code != 0)
+        return code;
+    code = resolve_path(root_real, req->uri, path, sizeof(path));
+    if (code != 0)
+        return code;
 
     /* resolve 와 open 사이에 파일이 바뀔 수 있으니 열고 나서 fstat 으로 크기·종류를 다시 본다 */
-    int file = open(path, O_RDONLY);
+    int file = open(path, O_RDONLY | O_CLOEXEC);
     if (file < 0)
-        return send_error(fd, errno == EACCES ? 403 : 404, head_only);
+        return errno == EACCES ? 403 : 404;
     if (fstat(file, &st) < 0 || !S_ISREG(st.st_mode))
     {
         close(file);
-        return send_error(fd, 403, head_only);
+        return 403;
     }
+    *fd = file;
+    *size = st.st_size;
+    *type = mime_type(path);
+    return 0;
+}
 
-    int n = build_header(hdr, sizeof(hdr), 200, mime_type(path), (size_t)st.st_size, 0, NULL);
+int serve_static(int fd, const char *root_real, const struct request *req)
+{
+    int head_only = strcmp(req->method, "HEAD") == 0;
+    char hdr[512], chunk[64 * 1024];
+    int file;
+    off_t size;
+    const char *type;
+
+    int code = static_open(root_real, req, &file, &size, &type);
+    if (code != 0)
+        return send_error(fd, code, head_only);
+
+    int n = build_header(hdr, sizeof(hdr), 200, type, (size_t)size, 0, NULL);
     if (n < 0)
     {
         close(file);
@@ -70,7 +86,7 @@ int serve_static(int fd, const char *root_real, const struct request *req)
 
     /* 본문: 파일 전체를 메모리에 올리지 않고 64KB 씩 읽어 보낸다 (큰 파일도 메모리 일정).
        헤더를 이미 보냈으니 여기서 실패하면 오류 응답을 못 보낸다 → 연결을 끊어 손님이 알게 */
-    off_t left = head_only ? 0 : st.st_size;
+    off_t left = head_only ? 0 : size;
     while (left > 0)
     {
         ssize_t r = read(file, chunk, sizeof(chunk));

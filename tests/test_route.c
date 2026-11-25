@@ -38,6 +38,20 @@ int main(void)
     CHECK(BAD("/api=a:1,a:2,a:3,a:4,a:5,a:6,a:7,a:8,a:9")); /* 9개 */
     CHECK(err != NULL);
 
+    /* ---- 백엔드 목록만 해석 (L4 중계 -L 이 씀): 접두어 없이 host:port 목록 ---- */
+    memset(&r, 0, sizeof(r));
+    CHECK(backends_parse("127.0.0.1:8081,127.0.0.1:8082", &r, &err) == 0);
+    CHECK(r.nbe == 2 && strcmp(r.be[0].port, "8081") == 0 && strcmp(r.be[1].host, "127.0.0.1") == 0);
+    CHECK(r.prefix[0] == '\0'); /* 접두어는 건드리지 않음 */
+    memset(&r, 0, sizeof(r));
+    CHECK(backends_parse("", &r, &err) == -1);
+    memset(&r, 0, sizeof(r));
+    CHECK(backends_parse("host", &r, &err) == -1);
+    memset(&r, 0, sizeof(r));
+    CHECK(backends_parse("h:80,", &r, &err) == -1);
+    memset(&r, 0, sizeof(r));
+    CHECK(backends_parse("h:99999", &r, &err) == -1);
+
     /* ---- 경로 조각 단위 매칭 (D4) ---- */
     CHECK(OK("/api=h:80"));
     CHECK(route_matches(&r, "/api"));

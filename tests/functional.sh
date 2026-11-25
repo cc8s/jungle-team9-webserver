@@ -5,10 +5,16 @@
 # D1 의 비교 기준: ⑤ prefork 와 ⑥ epoll 이 같은 이 테스트를 통과해야 한다 (C1).
 
 BIN=${1:-./webserver}
+MODEL=${MODEL:-epoll} # epoll (⑥) 또는 prefork (⑤). 같은 시나리오가 두 모델 모두에서 통과해야 한다 (C1)
 cd "$(dirname "$0")/.." || exit 1
 [ -x "$BIN" ] || { echo "no server binary: $BIN (run make first)"; exit 1; }
 
-P=$((20000 + RANDOM % 20000)) # 서버. 백엔드는 P+1, P+2
+in_use() { (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null; } # 누가 듣고 있으면 참
+# 포트는 리눅스 임시(ephemeral) 포트 범위(32768~)보다 낮게 고른다: 그 범위는 wrk·curl 의 연결이 쓰고 있어 bind 가 가끔 실패한다
+while :; do # 서버는 P, 백엔드는 P+1, P+2. 셋 중 하나라도 이미 쓰이고 있으면 다시 고른다
+  P=$((20000 + RANDOM % 12000))
+  in_use $P || in_use $((P + 1)) || in_use $((P + 2)) || break
+done
 B1=$((P + 1)); B2=$((P + 2))
 U=http://127.0.0.1:$P
 ROOT=$(mktemp -d)
@@ -32,10 +38,10 @@ echo '<h1>안녕</h1>' > "$ROOT/index.html"
 echo 'h1{color:red}' > "$ROOT/css/site.css"
 head -c 3000000 /dev/urandom > "$ROOT/big.bin"
 echo SECRET > "$ROOT/../functional-secret-$$.txt"
-python3 tests/backend.py $B1 & PIDS+=($!)
-python3 tests/backend.py $B2 & PIDS+=($!)
+python3 tests/backend.py $B1 & BP1=$!; PIDS+=($BP1)
+python3 tests/backend.py $B2 & BP2=$!; PIDS+=($BP2)
 # worker 1개: RR 카운터가 한 곳에 모여 정확히 번갈아 감 (여러 개면 worker 마다 따로 돈다, D4)
-"$BIN" -p $P -r "$ROOT" -w 1 -t 2 -R /api=127.0.0.1:$B1,127.0.0.1:$B2 > "$ROOT/../functional-server-$$.log" 2>&1 & SRV=$!
+"$BIN" -p $P -r "$ROOT" -w 1 -t 2 -m "$MODEL" -R /api=127.0.0.1:$B1,127.0.0.1:$B2 > "$ROOT/../functional-server-$$.log" 2>&1 & SRV=$!
 PIDS+=($SRV)
 wait_listen $P && wait_listen $B1 && wait_listen $B2 || { echo "서버·백엔드가 안 뜸"; exit 1; }
 
@@ -68,7 +74,12 @@ check "요청 라인 깨짐 → 400"           "HTTP/1.1 400 Bad Request" "$(raw
 check "3000자 URI → 414"              414 "$(code "$U/$(head -c 3000 /dev/zero | tr '\0' a)")"
 check "2MB 본문 → 413"                413 "$(head -c 2000000 /dev/zero | code --data-binary @- $U/up)"
 check "오류 본문에 요청 경로 없음 (D7)" 0 "$(printf 'GET /<script>x HTTP/2.0\r\nHost: a\r\n\r\n' | nc -q 1 127.0.0.1 $P | grep -c script)"
-check "응답이 Connection: close"       "Connection: close" "$(curl -s -i $U/ | grep -i '^Connection' | tr -d '\r')"
+check "Connection: close 요청 → close"  "Connection: close" "$(curl -s -i -H 'Connection: close' $U/ | grep -i '^Connection' | tr -d '\r')"
+if [ "$MODEL" = prefork ]; then
+  check "⑤ 는 기본도 close (D5)"         "Connection: close" "$(curl -s -i $U/ | grep -i '^Connection' | tr -d '\r')"
+else
+  check "⑥ 은 기본이 keep-alive (D5)"    "Connection: keep-alive" "$(curl -s -i $U/ | grep -i '^Connection' | tr -d '\r')"
+fi
 
 echo "== 리버스 프록시 (D2·D4)"
 check "정적과 구분: /apix 는 정적"      404 "$(code $U/apix/hello)"
@@ -96,9 +107,38 @@ check "찔끔 보내기는 -t(2초)에 끊김"     yes "$([ $ms -lt 4500 ] && ec
 for _ in 1 2 3; do curl -s -o /dev/null --max-time 0.2 --limit-rate 100k $U/big.bin; done
 check "받다가 끊는 손님 (SIGPIPE) 뒤에도 서버 생존" 200 "$(code $U/)"
 
+if [ "$MODEL" = epoll ]; then
+  echo "== keep-alive (D5, ⑥ 만)"
+  # num_connects: 그 전송이 새 연결을 맺었으면 1, 앞 연결을 재사용했으면 0. 두 요청 합이 1 이면 한 연결
+  check "한 연결로 두 요청 재사용"        1 "$(curl -s -o /dev/null -o /dev/null -w '%{num_connects}\n' $U/ $U/css/site.css | awk '{s+=$1} END {print s}')"
+  two=$(printf 'GET / HTTP/1.1\r\nHost: a\r\n\r\nGET /css/site.css HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n' | timeout 5 nc -q 2 127.0.0.1 $P)
+  check "파이프라이닝: 한 번에 보낸 두 요청에 응답 둘" 2 "$(echo "$two" | grep -c '^HTTP/1.1 200')"
+  check "파이프라이닝: 응답 순서 (html → css)" "text/html; charset=utf-8 text/css; charset=utf-8" "$(echo "$two" | tr -d '\r' | grep '^Content-Type' | cut -d' ' -f2- | tr '\n' ' ' | sed 's/ $//')"
+  args=(); for _ in $(seq 101); do args+=(-o /dev/null "$U/"); done # URL 마다 -o 가 있어야 출력이 안 섞임
+  check "연결당 요청 100개 상한 → 101번째는 새 연결" 2 "$(curl -s -w '%{num_connects}\n' "${args[@]}" | awk '{s+=$1} END {print s}')"
+  # 완전한 요청 하나를 보내고 응답을 받은 뒤, 서버가 유휴 타임아웃으로 닫을 때까지 (cat 은 서버가 닫아야 끝남)
+  # 요청이 덜 온 채로 닫힌 것과 구분하려고 응답 첫 줄도 함께 확인한다
+  t0=$(date +%s%N)
+  first=$(timeout 8 bash -c "exec 3<>/dev/tcp/127.0.0.1/$P; printf 'GET / HTTP/1.1\\r\\nHost: a\\r\\n\\r\\n' >&3; cat <&3" | head -1 | tr -d '\r')
+  ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+  check "쉬는 연결에도 응답은 먼저 옴"       "HTTP/1.1 200 OK" "$first"
+  check "쉬는 keep-alive 연결은 -t(2초) 뒤 닫힘" yes "$([ $ms -ge 1800 ] && [ $ms -lt 5000 ] && echo yes || echo "no(${ms}ms)")"
+  idle_pids=(); python3 tests/idle.py $P 1000 6 > /dev/null & idle_pids+=($!); sleep 1.5
+  check "노는 연결 1000개가 있어도 curl 은 즉시 (C4)" yes "$([ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 1 $U/)" = 200 ] && echo yes || echo no)"
+  kill "${idle_pids[@]}" 2>/dev/null
+fi
+
 echo "== 동시 접속"
 seq 1000 | xargs -P 40 -I{} curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 $U/ > "$ROOT/codes.txt"
 check "동시 40 × 1000 요청 전부 200"     "1000 200" "$(sort "$ROOT/codes.txt" | uniq -c | awk '{printf "%s %s", $1, $2}')"
+
+echo "== 백엔드 장애 (D4)"
+kill "$BP1"; wait "$BP1" 2>/dev/null; sleep 0.3
+check "백엔드 하나가 죽어도 6번 모두 200, 살아 있는 쪽으로" "6 backend=$B2" "$(for _ in $(seq 6); do curl -s --max-time 5 $U/api/x | grep ^backend=; done | sort | uniq -c | awk '{printf "%s %s", $1, $2}')"
+kill "$BP2"; wait "$BP2" 2>/dev/null; sleep 0.3
+check "백엔드가 모두 죽으면 502"          502 "$(code $U/api/x)"
+check "502 본문에 백엔드 주소 없음 (D7)"   0 "$(curl -s $U/api/x | grep -c 127.0.0.1)"
+check "502 뒤에도 정적은 정상"             200 "$(code $U/)"
 
 echo "== 종료"
 kill -TERM $SRV

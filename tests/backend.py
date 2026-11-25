@@ -2,6 +2,7 @@
 """기능 테스트·데모용 백엔드. 사용법: backend.py <포트>
 
 응답 본문에 자기 포트와 받은 요청(메서드·경로·Connection·X-Forwarded-For·본문)을 적어 돌려준다.
+  /api/wait...  1초 뒤에 응답 (느린 백엔드가 worker 를 붙잡는지 보는 비교 테스트 C10 용)
   /api/slow...  5초 뒤에 응답 (프록시 타임아웃 → 504 확인용)
   /api/cut...   응답 도중 연결을 끊는다 (길이는 1000 이라 해 놓고 7바이트만)
 """
@@ -20,6 +21,8 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode() if n else ""
         if self.path.startswith("/api/slow"):
             time.sleep(5)
+        if self.path.startswith("/api/wait"):
+            time.sleep(1)
         if self.path.startswith("/api/cut"):
             self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\npartial")
             self.wfile.flush()
@@ -49,4 +52,9 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+class Server(ThreadingHTTPServer):
+    request_queue_size = 1024  # 기본 5: 동시 접속이 많으면 SYN 이 버려져 서버가 아니라 이 백엔드가 먼저 병목이 된다
+    daemon_threads = True
+
+
+Server(("127.0.0.1", PORT), Handler).serve_forever()
