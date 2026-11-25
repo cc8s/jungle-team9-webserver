@@ -104,3 +104,9 @@ upload_id_next는 스레드 로컬 문맥으로 PID_워커번호_uint64_t순번�
 ## 구현 단계 2: 공통 작업 큐와 완료 큐
 
 thread_pool_submit은 mutex 아래 대기 큐만 변경하고 가득 차면 즉시 반환한다. worker_main은 cond_wait로 잠들고 작업을 꺼낸 뒤 잠금을 해제하여 execute를 수행한다. 완료 작업은 별도 할당 없이 job의 next 포인터로 완료 큐에 연결한 후 알림 콜백을 호출한다. 시작 시 일부 pthread_create 실패도 생성된 워커를 깨워 join한다.
+
+## 구현 단계 3: 실제 epoll 경로
+
+main의 CLI 해석 → event_loop_run → 리스너/완료 eventfd 등록 → epoll_wait → receive_request(recv/http_parse_request) → dispatch → execute_job(응답 준비/첫 파일 읽기) → 완료 큐 → collect_completions → start_sending → send_response(send만) 순서다. 파일 청크를 다 보냈으면 submit_read로 파일 읽기 작업을 제출하고, 포화 시 READ_PENDING으로 감시를 해제해 다음 완료 회수에서 재시도한다. 큐에 들어간 후속 작업도 종료 중 유지된다.
+
+close_connection은 워커 소유 상태를 회수한 뒤에만 호출한다. SIGINT/SIGTERM은 플래그+eventfd로 루프를 깨우고 부분 수신/idle 연결을 닫는다. PREPARING/READING/READ_PENDING/SENDING은 drain한 뒤 풀 join·FD 정리로 종료한다.

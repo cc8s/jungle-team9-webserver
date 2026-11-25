@@ -14,10 +14,13 @@ LIB_SRCS := $(filter-out src/main.c, $(SRCS))
 LIB_OBJS := $(patsubst src/%.c, $(BUILD)/%.o, $(LIB_SRCS))
 TESTS    := $(patsubst tests/%.c, $(TBIN)/%, $(wildcard tests/test_*.c))
 
-PORT ?= 8080
-ROOT ?= www
+WORKER ?= 4
+QUEUE ?= 64
+MAX ?= 128
+BUFFER ?= 32
+IMAGE ?= jungle-f2
 
-.PHONY: all test asan run clean
+.PHONY: all test test-f2 asan run clean docker-build docker-test
 
 all: $(BIN)
 
@@ -42,9 +45,19 @@ asan:
 	$(MAKE) test BUILD=build/asan TBIN=tests/bin/asan EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"
 
 run: $(BIN)
-	./$(BIN) $(PORT) $(ROOT)
+	./$(BIN) --worker $(WORKER) --queue $(QUEUE) --max $(MAX) --buffer $(BUFFER)
 
 clean:
 	rm -rf build tests/bin $(BIN)
 
 -include $(wildcard $(BUILD)/*.d)
+
+# Linux actual-main integration tests (port 8000 must be available).
+test-f2: $(BIN)
+	python3 tests/tools/test_epoll_server.py
+
+docker-build:
+	docker build -t $(IMAGE) .
+
+docker-test: docker-build
+	docker run --rm $(IMAGE) sh -c 'make test && make test-f2'

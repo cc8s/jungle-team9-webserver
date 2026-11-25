@@ -58,3 +58,15 @@ macOS에서 test_upload_id, test_http_response, test_fault_recovery, test_transf
 ## 구현 단계 2 실제 결과
 
 macOS test_thread_pool 통과: 두 워커가 동시에 시작한 상태에서 두 대기 작업으로 큐를 채우고 추가 제출의 즉시 포화 반환을 확인했다. 장벽 해제 후 승인된 작업 네 개의 완료가 유실되지 않고 회수되는 것도 확인했다.
+
+## 구현 단계 3 실제 결과
+
+Docker Ubuntu22.04/Linux arm64에서 경고 없는 제품 빌드와 tests/tools/test_epoll_server.py 통과를 확인했다. 실제 main으로 느린 헤더·워커 수보다 많은 idle 연결·버퍼 내 pipeline·늦은 GET body 뒤 POST·SHUT_WR·24개 병렬 업로드·연결 상한1의 수락 pause/resume·수신 버퍼1 MiB 초과 close·잘못된 CLI 거부를 검증했다.
+
+큐 포화는 테스트 전용 LD_PRELOAD 읽기 장벽으로 워커1개를 파일 읽기에서 멈추고 큐1개를 채운 상태로 재현했다. 추가 요청의 503/Connection: close·EOF를 확인하고 SIGTERM 후 장벽을 해제하여 256 KiB 파일의 후속 청크와 기존 큐 요청이 모두 전송된 뒤 정상 종료하는 것을 검증했다. 이 장벽 코드는 제품 실행에 포함되지 않는다.
+
+실행: `make docker-test`는 이미지 빌드 후 컨테이너에서 기존 회귀와 실제 main 통합 검증을 실행한다. Docker 이미지의 포트는8000, 정적 루트는/app/www, 업로드 저장소는/app/uploads_storage로 기존 위치를 유지한다. 호스트 실행 예: `docker run --rm -p 8000:8000 jungle-f2`.
+
+기존 회귀 실행 결과: Docker Linux에서 `make test` 전체 통과. root 컨테이너에서 생략되는 권한 거부 사례는 별도 UID1000 컨테이너에서 test_http_response/test_post를 실행해 통과했다. 기존 test_post의 파일명 snprintf 길이 경고는 테스트 코드의 기존 경고이며 제품 빌드 경고는 없었다.
+
+부모 에이전트의 독립 실제main 검증: 워커1개와16 MiB 파일, 수신버퍼1024의 읽지 않는 상대를 둔 동안 다른 GET이2초 이내 완료했고, 6초 후 SIGTERM에서3초 이내 정상 종료했다. 기능 확인의 시간 상한이며 처리량 벤치마크가 아니다.

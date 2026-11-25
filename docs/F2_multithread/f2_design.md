@@ -117,3 +117,18 @@ connection에 fd, 재사용 방지용 generation, 수신 buffer/request, 요청 
 - eventfd는 epoll로 감시 가능한 스레드 간 알림 FD다: https://man7.org/linux/man-pages/man2/eventfd.2.html
 
 - Nginx thread_pool 설정: https://nginx.org/en/docs/ngx_core_module.html#thread_pool
+
+## 구현 반영 (2026-11-25)
+
+사용자가 파일 후속 읽기는 큐 포화 시 main에서 기다리지 않고 슬롯 확보 후 재제출하도록 추가 승인했다. 신규 요청의 포화503 정책과 구분한다.
+
+- event_loop.c가 수신·파싱·EPOLLOUT 부분송신·기한·연결 상한·종료를 관리한다. 기존 handle_connection/http_receive_request는 F1 호환 호출자와 테스트를 위해 유지한다.
+- thread_pool.c는 작업 포인터 bounded FIFO와 할당 없는 완료 연결리스트를 같은 mutex로 보호하며 execute 동안에는 잠금을 놓는다. 메인과 워커 사이 publication은 이 mutex로 동기화한다.
+- 워커는 http_prepare_response와 http_prepare_file_chunk만 실행한다. 응답 준비 시 첫 파일 청크도 읽고, main이 전송한 뒤 남은 파일은 READ_PENDING 상태에서 재제출한다. 청크 준비 대기에는 EPOLLOUT과 송신 기한을 적용하지 않으며 읽기 완료 후 송신 기한을 시작한다.
+- main이 응답 객체의 헤더/본문/청크 위치를 보관하고 send가 EAGAIN이면 즉시 이벤트 루프로 반환한다. 오류/close 응답 또는 종료 중이면 전송 완료 뒤 연결을 닫는다.
+- 내부 backlog는 구현 출발값128, CLI 범위는 worker1..1024, queue/max1..65536, buffer1..1048576 MiB로 정했다. 모두 숫자로 된 양수만 받고 단위 변환 오버플로도 검사한다. 실제 메모리·스레드 확보 실패 시 시작을 취소하고 부분 생성 자원을 회수한다.
+- 워커 번호는 1..N이며 비워커 ID 호출자는 2^32부터 번호를 한 번 발급받는 TLS 문맥을 사용한다. 이 번호 발급만 atomic이며 매 업로드 순번은 로컬이다.
+- 연결 이벤트 토큰은 슬롯+generation으로 이전 연결의 이벤트를 무시한다. generation 소진 시 재사용하지 않고 서버 오류로 종료한다.
+- 수신 이벤트마다 64 KiB, 수락 이벤트마다32개의 작업 예산으로 루프 독점을 제한한다. 각 epoll 반복에서 기한을 검사하며 준비 알림만 계속 와도 만료를 처리한다. 만료 검사는 미수신 요청을 대상으로 하므로 기한이 지난 뒤 커널에 도착해 아직 읽지 않은 헤더까지 처리하는 것은 보장하지 않는다.
+
+이 절의 구현 선택이 위 초기 미결정 목록을 해소한다. 최종 실행 결과는 f2_testcases.md를 따른다.
