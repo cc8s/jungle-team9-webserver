@@ -10,6 +10,7 @@ static int check_failed;
     do {                                                                \
         if (!(cond)) {                                                  \
             printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);    \
+            fflush(stdout); /* 뒤에서 멈추거나 죽어도 이 줄은 남게 */    \
             check_failed++;                                             \
         }                                                               \
     } while (0)
