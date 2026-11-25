@@ -14,6 +14,7 @@ main → accept → handle_connection
 ## 전환 후 초기화
 
 main
+→ CLI 해석·범위 검증 (기본: 워커4/큐64/연결128/수신32 MiB)
 → socket / bind / listen / SIGPIPE 무시
 → listener O_NONBLOCK
 → thread_pool_init(N, Q) : mutex·condvar·작업/완료 큐·워커 문맥
@@ -25,7 +26,8 @@ main
 
 epoll_wait(가장 가까운 활성 기한까지)
 → listener 준비: accept_connections (예산 범위에서 accept, EAGAIN이면 반환)
-  → 연결 상한 확인 → 수락 시각·generation·connection 생성
+  → 연결 128개 도달 시 listener 감시 중지 → 공간 확보 후 재개
+  → 수락 시각·generation·connection 생성
   → 연결 O_NONBLOCK → EPOLLIN 등록
 → 연결 준비: connection_read_step
   → recv → buffer 누적 → http_parse_request
@@ -33,7 +35,8 @@ epoll_wait(가장 가까운 활성 기한까지)
   → COMPLETE: READY → dispatch_request
   → PARSE_ERROR/수신 timeout: 기존 오류 응답용 작업 구성
 → dispatch_request
-  → 큐 공간 없으면 합의한 포화 처리 (루프에서 cond_wait 하지 않음)
+  → 큐 64칸이 모두 차면 고정 503 응답 준비 → SENDING/EPOLLOUT → 전송 완료 후 close
+    (작업 큐에 재등록하지 않고, 송신 오류/기한 초과 시 정리)
   → epoll_ctl(DEL), QUEUED 표시, 객체 수명 보장
   → request_queue_push({connection 식별자, request/buffer 참조, force_close})
   → mutex 해제 전후 일관된 규칙으로 cond_signal
@@ -47,11 +50,12 @@ worker_main(worker_context)
 → while(작업 없음 && 종료 아님) cond_wait
 → request_queue_pop → mutex unlock
 → WORKING
-→ http_respond(fd, buffer, request, force_close)
-  → GET: get_prepare → send_headers → get_send_body
-  → POST: post_prepare → JSON/폼/업로드 → send_json_response
-  → http_send_all의 poll(POLLOUT)/send는 1차안에서 유지
-→ completion_queue_push({connection 식별자, 응답 결과})
+→ response_prepare(buffer, request, force_close) (신규 API 제안)
+  → GET: 파일·MIME·길이 등 준비
+  → POST: JSON/폼/업로드 처리 후 응답 본문 준비
+  → 상태·헤더·본문/파일 자원을 응답 객체로 반환
+  → 워커는 소켓에 send/poll하지 않음
+→ completion_queue_push({connection 식별자, 준비 결과/응답 객체})
 → eventfd write (알림을 모아도 완료 큐 항목은 전부 회수)
 → 다음 작업 대기
 
@@ -61,20 +65,25 @@ worker_main(worker_context)
 
 완료 FD 준비 → eventfd read → completion_queue를 비움
 → generation 일치·연결 수명 확인
-→ 응답 실패/close/오류 응답/100개 제한이면 connection_close
-→ 유지 가능하면 처리한 요청 consumed만 consume
+→ 응답 객체 소유권 회수 → SENDING → EPOLLOUT 등록
+→ response_send_step: 부분 send, 전송 위치 보존, EAGAIN이면 루프로 반환
+  → 실제 전송 진행만 쓰기 기한 갱신. 송신 오류/기한 초과이면 close
+  → 전송 완료 후에만 응답 객체의 파일 FD·메모리 정리
+→ close 지정/오류 응답/100개 제한이면 connection_close
+→ 전송 완료 후 유지 가능하면 처리한 요청 consumed만 consume
   → GET 본문 잔량: buffer에서 먼저 폐기, 부족분은 DISCARD_GET_BODY
     → EPOLLIN에서 길이만큼만 recv/폐기, 완료 후 다음 요청 진행
   → buffer에 다음 요청 있음: 즉시 파싱, 완료면 재전달
   → buffer 없음: IDLE, 5초 기한, EPOLLIN 재등록
-→ 큐 공간이 생겼으면 READY 연결 재전달 시도
+큐 포화 요청은 READY에서 기다리지 않고 503을 전송한다. 수신 버퍼 총 예산 초과 시 해당 연결을 닫는다. 파일 청크 읽기/공급 API는 추가 설계 필요.
 
 connection_close는 이벤트 루프만 실행한다: 감시 해제 → close → buffer/객체 해제 → 연결 수 감소 → 필요 시 listener 재개. 워커에 인계된 객체는 완료까지 닫거나 해제하지 않는다.
 
 ## 종료
 
 종료 요청 알림 → listener 해제·수락 중단
-→ 합의한 queued/ready/수신/실행 작업 정책 적용
+→ 큐에 든 작업·실행 중 작업은 응답 준비와 전송까지 계속 진행
+→ 부분 수신/idle/기존 송신 중 연결의 세부 정리·전체 종료 기한은 추가 합의
 → 종료 플래그와 cond_broadcast
 → 완료 이벤트를 계속 회수하며 활성 작업 수명 보장
 → 워커 join → 연결/큐/eventfd/epoll/listener 정리
