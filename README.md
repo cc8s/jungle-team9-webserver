@@ -3,14 +3,23 @@
 크래프톤 정글 WEEK13: C 와 POSIX 소켓 API 만으로 만든 HTTP/1.1 웹 서버 + 리버스 프록시.
 외부 HTTP·이벤트 루프 라이브러리(libevent, libuv, nginx 등)는 쓰지 않았습니다.
 
-```
- 손님 ──▶ [ 웹 서버 ]──(정적 파일)──▶ 디스크
-            │  worker N 개 (각자 epoll 로 연결 수천 개)
-            └─(-R /api=...)──▶ 백엔드 1..N   (Round-Robin, 실패하면 다음, 다 실패하면 502, 무응답이면 504)
+## 구성도
 
- 선택: 손님 ──▶ [ L4 중계 -L ] ──▶ [ 웹 서버 A ] ─▶ 백엔드     (연결 단위로 나눔. 서버 하나가 죽어도 계속)
-                              └─▶ [ 웹 서버 B ] ─▶ 백엔드
-```
+**서버 구조**: 부모가 worker N 개를 띄우고(죽으면 다시 띄움), 각 worker 는 `epoll` 로 연결 여러 개를 다루며 정적 파일(`sendfile`)을 보내거나 `-R` 경로를 백엔드로 전달합니다(Round-Robin, 실패하면 다음 백엔드, 다 실패하면 502, 무응답이면 504). 아래쪽은 빌드·테스트·CI 도구입니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
+  <img src="docs/architecture.png" alt="서버 구조: 클라이언트가 HTTP 로 worker 에 접속하고, worker 는 정적 파일을 sendfile 로 보내거나 reverse proxy 로 백엔드 A·B 에 Round-Robin 으로 전달한다. 부모(prefork)가 worker 를 fork 한다. 아래쪽에서 GitHub Actions 와 Make, Sanitizers 가 빌드와 테스트를 맡는다" width="100%">
+</picture>
+
+**L4 → L7 2단 구성 (선택, `-L`)**: L4 중계는 HTTP 를 읽지 않고 TCP 연결을 L7 서버 둘에 나눕니다. L7 하나가 죽으면 건너뜁니다. 같은 PC 의 포트만 다르게 띄웁니다 (8000 → 8081·8082).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/two-tier-dark.png">
+  <img src="docs/two-tier.png" alt="2단 구성: 클라이언트가 L4 중계에 접속하면 중계가 연결마다 L7 웹 서버 A(8081)와 B(8082) 중 하나로 나누고, 두 서버가 /api 요청을 Round-Robin 으로 파이썬 백엔드에 전달한다" width="100%">
+</picture>
+
+<sub>그림 속 로고는 각 소유자의 상표입니다 (출처: svgl, gilbarbara/logos, Lucide).</sub>
 
 ## 한눈에
 
