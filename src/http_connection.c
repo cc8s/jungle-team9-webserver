@@ -92,14 +92,20 @@ handle_connection(int fd, int64_t accepted_at)
 {
     http_buffer buffer = {0};
     for (unsigned count = 0; count < HTTP_CONNECTION_REQUEST_LIMIT; count++) {
-        if (count && !buffer.length && !wait_next_request(fd))
+        // 1. 버퍼 비어있으면 대기 
+        if (count && !buffer.length && !wait_next_request(fd)){
             break;
+        }
+            
         int64_t start = count ? http_now_ms() : accepted_at;
-        if (start < 0)
+        if (start < 0){
             break;
+        }
+        
         http_request request = {0};
-        http_parse_result parsed = http_receive_request(fd, &buffer, &request,
-                                                        start + HTTP_HEADER_TIMEOUT_MS);
+        // 2. 버퍼에 있는 request 파싱 
+        http_parse_result parsed = http_receive_request(fd, &buffer, &request, start + HTTP_HEADER_TIMEOUT_MS);
+        
         if (parsed == HTTP_COMPLETE) {
             printf("request: %.*s %.*s (%zu bytes)\n",
                    (int)request.method.length, buffer.data + request.method.offset,
@@ -109,6 +115,8 @@ handle_connection(int fd, int64_t accepted_at)
             fprintf(stderr, "request error: %d\n", request.error);
         }
         int force_close = request.connection_close || count + 1 == HTTP_CONNECTION_REQUEST_LIMIT;
+
+        // 3. 메서드 종류에 따라 분기 처리
         http_response_result response = http_respond(fd, &buffer, &request, force_close);
         if (response.io_error < 0) {
             fprintf(stderr, "response send failed\n");
@@ -116,8 +124,7 @@ handle_connection(int fd, int64_t accepted_at)
         }
         if (response.close_connection || parsed != HTTP_COMPLETE)
             break;
-        int get = request.method.length == 3 &&
-                  !memcmp(buffer.data + request.method.offset, "GET", 3);
+        int get = request.method.length == 3 && !memcmp(buffer.data + request.method.offset, "GET", 3);
         consume(&buffer, request.consumed);
         if (get && discard_get_body(fd, &buffer, request.content_length) < 0)
             break;

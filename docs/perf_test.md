@@ -1,6 +1,6 @@
 # wrk 기능·부하 테스트 계획
 
-작성일: 2026-11-25. 상태: **계획 작성 완료 / 테스트 미실행**.
+작성일: 2026-11-25. 상태: **계획·실행 도구 작성 및 핵심 축약 검증 진행**. 원래 전체 매트릭스와 최장 16분 유지는 미실행이며, 실제 범위는 하단 실행 기록을 따른다.
 
 ## 1. 목적과 확정 범위
 
@@ -42,7 +42,7 @@ wrk HTTP/1.1 요청
 1. 실행 직전 Git HEAD와 `git diff`를 보관한다. 미커밋 소스가 있으면 측정 대상에 포함되는지 명시하고, 해시만으로 재현 가능하다고 표현하지 않는다. 사용자 변경을 자동 정리하지 않는다.
 2. Linux 커널·아키텍처, CPU·메모리, Docker CPU/메모리 제한, 컴파일러·CFLAGS, wrk 버전, FD 제한, 서버 옵션, 부하 발생기 위치를 기록한다.
 3. 제품 빌드와 기능 회귀(`make test`, `make test-f2`)를 통과시킨다. 성능 측정에는 sanitizer를 사용하지 않고 기본 `-O2` 빌드를 쓴다.
-4. 현재 호스트의 wrk/hey 설치는 확인되지 않았다. 실행 환경에서 `wrk --version`으로 확인하고 도구 준비는 실행 작업에서 진행한다. 계획 작성 단계에서는 설치하지 않는다.
+4. 호스트 글로벌 설치 대신 tests/perf/Dockerfile의 전용 Ubuntu 이미지에 wrk를 준비했다. environment.sh build/up/exec/down으로 실행하며 실제 버전은 실행 환경 로그에 기록한다. hey는 이번 범위에 포함하지 않는다.
 5. 서버·wrk·관측기는 전용 환경에서 실행하고 다른 부하를 중지한다. 서버와 wrk를 별도 컨테이너로 나누되 같은 Docker 네트워크에서 접속해 포트 포워딩 영향을 줄인다. 같은 호스트의 CPU·메모리는 여전히 공유한다.
 6. 실제 제품 main이 사용하는 전용 테스트 저장소에만 fixture를 만든다. 기존 사용자 www·uploads_storage·8000 포트 서버는 사용하지 않는다.
 7. 고정 fixture: `/perf/small.bin` 1KiB(주 측정), `/perf/medium.bin` 64KiB(전송량 비교), `/perf/large.bin` 16MiB(느린 수신 보조 검증). 내용과 SHA-256을 기록하고 측정 전 읽어 페이지 캐시를 준비한다. 디스크 cold-cache 성능은 이번 범위가 아니다.
@@ -54,7 +54,7 @@ wrk HTTP/1.1 요청
 
 wrk의 정상 응답은 이벤트 루프 내부의 공정성이나 모든 상태 전이를 단독 증명하지 못한다. 주 요청은 wrk로 만들고, 느린 헤더·idle·읽지 않는 연결은 작은 Python 보조 클라이언트 또는 기존 `tests/tools/test_epoll_server.py` 방식으로 제어한다. 결정적인 큐 포화는 기존 테스트 장벽을 재사용하며 성능 측정에 장벽을 넣지 않는다.
 
-기능용 Lua `response(status, headers, body)`에서 기대 상태·본문·Content-Length를 확인하고 스레드별 검사 수·오류 수를 `done`에서 합산한다. 잘못된 응답을 출력만 하고 성공으로 처리하지 않도록 실행 래퍼가 최종 판정을 수행한다. 아래 Lua/래퍼는 **추후 작성 대상**이며 현재 생성·실행되지 않았다.
+기능용 Lua `response(status, headers, body)`에서 기대 상태·본문·Content-Length를 확인하고 스레드별 검사 수·오류 수를 `done`에서 합산한다. 잘못된 응답을 출력만 하고 성공으로 처리하지 않도록 실행 래퍼가 최종 판정을 수행한다. 이 Lua/래퍼는 tests/perf 아래에 구현했다. 실제 실행 범위와 제약은 하단 및 전용 결과 문서를 따른다.
 
 | ID | 시나리오·입력 | 큰 흐름과 기대 결과 |
 |---|---|---|
@@ -129,17 +129,17 @@ wrk는 응답을 기다리며 다음 요청을 보내는 closed-loop 도구다. 
 
 ## 8. 실행 예시와 산출물
 
-아래 명령은 Linux의 준비된 전용 실행 환경에서 사용하는 예시다. `${PERF_BASE_URL}`은 실제 테스트 서버 주소로 지정한다. 실제 실행 래퍼·Lua·관측기는 이후 구현한다.
+아래 명령은 Linux의 준비된 전용 실행 환경에서 사용하는 예시다. `${PERF_BASE_URL}`은 실제 테스트 서버 주소로 지정한다. 환경·래퍼·Lua·관측기는 tests/perf에 구현했으며 구체적인 명령은 tests/perf/README.md를 따른다.
 
 ```bash
 # 전용 fixture/디렉토리를 준비한 제품 서버
 ./webserver --worker 4 --queue 64 --max 128 --buffer 32
 
-# 기능 진단: validate.lua는 후속 구현 대상
+# 기능 진단: EXPECTED_FILE 인자로 본문 fixture 지정
 wrk -t1 -c16 -d10s --timeout 15s -s tests/perf/validate.lua \
-  "${PERF_BASE_URL}/perf/small.bin"
+  "${PERF_BASE_URL}/perf/small.bin" -- /fixtures/www/perf/small.bin
 
-# 기본 처리량: percentiles.lua는 response 콜백 없는 후속 구현 대상
+# 기본 처리량: percentiles.lua는 response 콜백 없음
 wrk -t1 -c64 -d30s --timeout 15s --latency -s tests/perf/percentiles.lua \
   "${PERF_BASE_URL}/perf/small.bin"
 
@@ -152,12 +152,12 @@ wrk -t1 -c32 -d960s --timeout 15s --latency \
   "${PERF_BASE_URL}/perf/small.bin"
 ```
 
-후속 구현/기록 대상:
+구현 도구/기록 대상:
 
 - `tests/perf/validate.lua`, `percentiles.lua`, 상태별 진단 Lua와 실행 래퍼·보조 클라이언트·자원 관측기.
 - `build/perf-results/<실행ID>/`: 환경·소스 상태·fixture 해시·명령·원본 wrk/서버 로그·자원 CSV·판정.
 - 결과 표: 시나리오 / 파일 크기 / keep-alive 여부 / C / wrk 스레드 / 시간 / 반복 / 전체·성공 RPS / p50·p95·p99 / HTTP 상태 / socket 오류 / CPU·RSS·FD / 회복 결과.
-- 실제 실행 후 본 문서 또는 별도 결과 문서에 실행일·커밋·변경 상태·통과/실패/미실행과 한계를 기록한다. 현재 결과 칸은 모두 미실행이다.
+- 실제 실행 후 본 문서 또는 별도 결과 문서에 실행일·커밋·변경 상태·통과/실패/미실행과 한계를 기록한다. 아래 핵심 검증 기록 외의 전체 계획은 미실행이다.
 
 ## 9. 미결정 사항
 
@@ -169,3 +169,16 @@ wrk -t1 -c32 -d960s --timeout 15s --latency \
 
 - [wrk 공식 README: connections/duration/threads/latency와 부하 발생기 주의사항](https://github.com/wg/wrk/blob/master/README.md)
 - [wrk SCRIPTING: response 콜백·상태 집계·percentile API](https://github.com/wg/wrk/blob/master/SCRIPTING)
+
+## 10. 구현 및 핵심 축약 실행 기록
+
+사용자에게 핵심/전체 범위를 질문했으며 아직 응답이 없어, 핵심 축약 범위를 가정해 도구와 실행 경로를 검증한다. 전체 부하 계획의 완료나 성능 합격을 의미하지 않는다.
+
+- [실행 도구 사용법](../tests/perf/README.md)
+- [환경 검증](perf_environment_results.md): 전용 Docker 서버/발생기, 실제 HTTP/1.1·200 본문·PID 관측·정상 종료.
+- [기능 검증](perf_functional_results.md): F01 동시성 1..64 각 1초, F02/03/04/05/08 각 1초, F09 명시적 100요청 종료와 wrk 10초 재연결. 총 검증 응답 5,155개에서 불일치·예상하지 않은 소켓 오류 0. F06/F07는 기존 실제-main 소켓/장벽 통합 검사로 보완했다.
+- [부하 실행기 검증](perf_runner_results.md): 기본 dry-run, 명시적 execute, pure/diagnostic 분리, Linux 서버·발생기 자원 관측. 동시성 1..1024의 1초×1회 및 유지 1/2/4/8초의 실제 완료 결과는 해당 문서에 기록한다.
+
+기능 보완 범위: F05는 느린 송신 중 다른 요청의 진행을 검사하며 정확한 송신 timeout 자체는 이번 runner에서 재검증하지 않는다. F08은 끊김 후 진행/복구를 확인하며 해당 사례별 FD 회수는 직접 계측하지 않았다. F02는 물리 연결별 식별이 아닌 wrk 스레드별 식별이다. 상세 제약은 전용 결과 문서를 따른다.
+
+미실행: 전체 파일크기·연결모드 매트릭스의 30초×3회 측정, 30~960초 유지, 수치 SLO 판정. 제품 코드와 기존 사용자 변경은 보존한다.
