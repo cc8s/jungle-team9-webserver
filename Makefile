@@ -17,7 +17,7 @@ TESTS    := $(patsubst tests/%.c, $(TBIN)/%, $(wildcard tests/test_*.c))
 PORT ?= 8080
 ROOT ?= www
 
-.PHONY: all test asan run clean
+.PHONY: all test asan functional run clean
 
 all: $(BIN)
 
@@ -42,6 +42,10 @@ test: $(TESTS)
 
 asan:
 	$(MAKE) test BUILD=build/asan TBIN=tests/bin/asan EXTRA_CFLAGS="$(SAN)" EXTRA_LDFLAGS="$(SAN)"
+
+# 실제 서버를 띄워 curl·nc 로 확인하는 기능 테스트 (curl, nc, python3 필요)
+functional: $(BIN)
+	bash tests/functional.sh ./$(BIN)
 
 run: $(BIN)
 	./$(BIN) -p $(PORT) -r $(ROOT)

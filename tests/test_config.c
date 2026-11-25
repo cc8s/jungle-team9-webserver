@@ -41,6 +41,19 @@ int main(void)
     CHECK(PARSE("-p", "8080", "-r", "www", "-t", "0") == -1);
     CHECK(PARSE("-p", "8080", "-r", "www", "-t", "five") == -1);
 
+    /* -R 형식은 시작할 때 바로 검사 (서버가 잘못된 규칙으로 뜨지 않게) */
+    CHECK(PARSE("-p", "8080", "-r", "www", "-R", "bad") == -1);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-R", "/api=host") == -1);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-R", "/=h:80") == -1);
+
+    /* worker 수: 안 주면 0 (main 이 코어 수로), 1~256 */
+    CHECK(PARSE("-p", "8080", "-r", "www") == 0 && cfg.workers == 0);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-w", "4") == 0 && cfg.workers == 4);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-w", "256") == 0 && cfg.workers == 256);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-w", "0") == -1);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-w", "257") == -1);
+    CHECK(PARSE("-p", "8080", "-r", "www", "-w", "two") == -1);
+
     /* 모르는 옵션, 값 없는 옵션, 남는 인자 */
     CHECK(PARSE("-p", "8080", "-r", "www", "-x") == -1);
     CHECK(PARSE("-p", "8080", "-r") == -1);
