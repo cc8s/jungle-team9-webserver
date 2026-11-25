@@ -124,6 +124,13 @@ SIGINT·SIGTERM 은 표시만 세우고 `epoll_pwait` 안에서만 받아 놓치
 
 질문: L7 서버 하나가 죽으면 그 서버로 가던 손님은? 앞에 HTTP 를 읽지 않는 L4(TCP) 중계를 두어 연결을 L7 서버 둘에 나누고, 하나가 죽으면 건너뛰게 했습니다.
 
+아래 화면은 0.3초마다 요청을 보내다가 3초에 L7 a 를 `kill -9`(프로세스 그룹째)로 죽인 실제 실행 기록을 재생한 것입니다. 1단은 죽은 뒤 요청이 모두 실패하고, 2단은 L4 가 남은 L7 b 로 계속 보내 실패가 없습니다 (요청 24개씩, 1단 성공 9·실패 15, 2단 성공 24·실패 0).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/demo-l7-kill-dark.gif">
+  <img src="docs/demo-l7-kill.gif" alt="L7 서버 하나일 때와 L4→L7 둘일 때 L7 a 를 3초에 죽이는 재생. 1단은 이후 요청이 모두 실패하고 2단은 L7 b 로 계속 성공한다" width="100%">
+</picture>
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/test-l4-l7-dark.png">
   <img src="docs/test-l4-l7.png" alt="L7 하나(S1)와 L4→L7(S2)의 처리량 막대 비교. 1KB keep-alive 219.5k 대 50.5k, 1KB close 33.5k 대 14.7k, 100KB 코어 고정 67.5k 대 13.5k req/s" width="100%">
