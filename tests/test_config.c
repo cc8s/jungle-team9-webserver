@@ -46,9 +46,13 @@ int main(void)
     CHECK(PARSE("-p", "8080", "-r") == -1);
     CHECK(PARSE("-p", "8080", "-r", "www", "extra") == -1);
 
-    /* -R 상한 */
-    CHECK(PARSE("-p", "8080", "-r", "www", "-R", "a", "-R", "a", "-R", "a", "-R", "a", "-R", "a",
-                "-R", "a", "-R", "a", "-R", "a", "-R", "a") == -1);
+    /* -R 상한: 8개는 통과, 9개는 거절. 값은 올바른 형식으로 줘야 나중에 #8 에서 형식 검사가 붙어도
+       "형식이 틀려서" 가 아니라 "개수가 많아서" 거절되는지를 계속 시험한다 */
+#define RT "-R", "/a=127.0.0.1:9001"
+    CHECK(PARSE("-p", "8080", "-r", "www", RT, RT, RT, RT, RT, RT, RT, RT) == 0);
+    CHECK(cfg.nroutes == MAX_ROUTES);
+    CHECK(PARSE("-p", "8080", "-r", "www", RT, RT, RT, RT, RT, RT, RT, RT, RT) == -1);
+#undef RT
 
     CHECK_DONE();
 }
