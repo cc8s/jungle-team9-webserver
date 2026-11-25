@@ -11,6 +11,7 @@
 #include "net.h"
 #include "request.h"
 #include "response.h"
+#include "signals.h"
 #include "static.h"
 
 /* 요청 하나를 담을 수 있는 크기: 헤더 상한 + 본문 상한. 1MB 넘으니 스택 대신 main 에서 한 번 malloc */
@@ -28,8 +29,13 @@ static void handle_conn(int connfd, char *buf, const char *root_real)
     /* 바이트가 올 때마다 처음부터 다시 파싱 (파서가 상태를 저장하지 않으므로) */
     while (r == PARSE_INCOMPLETE) {
         ssize_t n = read(connfd, buf + len, CONN_BUF_SIZE - len);
-        if (n < 0 && errno == EINTR)
+        if (n < 0 && errno == EINTR) {
+            /* 요청이 아직 덜 왔는데 종료 시그널 → 이 요청은 버린다 (안 그러면 멈춘 손님이 종료를 막음).
+             * 이미 보내기 시작한 응답은 write_all 이 EINTR 를 넘기고 끝까지 보낸다 */
+            if (stop_requested())
+                return;
             continue;
+        }
         if (n <= 0) /* 오류이거나 손님이 요청 도중에 닫음 → 보낼 상대가 없으니 그냥 끝 */
             return;
         len += (size_t)n;
@@ -83,10 +89,16 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: out of memory\n");
         return 1;
     }
-    printf("listening on port %s (root=%s)\n", cfg.port, cfg.root);
+    if (install_signals() < 0) {
+        perror("sigaction");
+        return 1;
+    }
+    printf("listening on port %s (root=%s)\n", cfg.port, root_real);
     fflush(stdout);
 
-    for (;;) {
+    /* SIGINT·SIGTERM 이 오면 accept 가 EINTR 로 깨어나고 여기서 루프를 빠져나간다.
+     * 처리 중이던 요청은 마저 끝낸 뒤에 빠져나간다 (응답이 중간에 잘리지 않게). */
+    while (!stop_requested()) {
         struct sockaddr_storage addr;
         socklen_t addrlen = sizeof(addr);
         char host[NI_MAXHOST], serv[NI_MAXSERV];
@@ -94,7 +106,7 @@ int main(int argc, char **argv)
         /* 손님이 올 때까지 여기서 잠든다 (blocking) */
         int connfd = accept(listenfd, (struct sockaddr *)&addr, &addrlen);
         if (connfd < 0) {
-            if (errno == EINTR) /* 시그널 때문에 깨어난 것뿐이면 다시 기다린다 */
+            if (errno == EINTR) /* 시그널에 깨어남: 종료 시그널이면 while 조건에서 빠져나간다 */
                 continue;
             perror("accept");
             continue;
@@ -108,4 +120,10 @@ int main(int argc, char **argv)
         fflush(stdout);
         close(connfd);
     }
+
+    /* 정리: 듣던 소켓을 닫아 포트를 돌려주고, 버퍼를 해제한다 (ASan/LeakSanitizer 가 확인) */
+    printf("shutting down\n");
+    close(listenfd);
+    free(buf);
+    return 0;
 }
