@@ -1,5 +1,7 @@
 #include "config.h"
 
+#include "route.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -31,7 +33,7 @@ int parse_args(int argc, char **argv, struct config *cfg, const char **err)
     optind = 0; /* glibc: 0 이면 getopt 내부 상태를 처음부터 다시 (테스트에서 여러 번 부르기 위해) */
     opterr = 0; /* getopt 가 직접 화면에 오류를 찍지 않게. 오류는 *err 로 돌려준다 */
 
-    while ((c = getopt(argc, argv, "p:r:R:t:")) != -1) {
+    while ((c = getopt(argc, argv, "p:r:R:t:w:")) != -1) {
         switch (c) {
         case 'p':
             if (!is_int_in_range(optarg, 1, 65535, NULL)) {
@@ -48,6 +50,11 @@ int parse_args(int argc, char **argv, struct config *cfg, const char **err)
                 *err = "too many -R routes";
                 return -1;
             }
+            {
+                struct route probe; /* 형식만 확인하고 버린다. 실제 규칙은 main 이 다시 해석 */
+                if (route_parse(optarg, &probe, err) < 0)
+                    return -1;
+            }
             cfg->routes[cfg->nroutes++] = optarg;
             break;
         case 't':
@@ -56,6 +63,13 @@ int parse_args(int argc, char **argv, struct config *cfg, const char **err)
                 return -1;
             }
             cfg->timeout_sec = (int)v;
+            break;
+        case 'w':
+            if (!is_int_in_range(optarg, 1, MAX_WORKERS, &v)) {
+                *err = "workers must be 1-256";
+                return -1;
+            }
+            cfg->workers = (int)v;
             break;
         default: /* 모르는 옵션이거나 값이 빠진 옵션 ('?') */
             *err = "unknown option or missing value";
