@@ -31,7 +31,10 @@ $(BUILD) $(TBIN):
 	mkdir -p $@
 
 $(TBIN)/%: tests/%.c $(LIB_OBJS) | $(TBIN)
-	$(CC) $(CFLAGS) -Itests $^ -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) -Itests $^ -o $@ $(LDFLAGS) $(TEST_LDFLAGS)
+
+# test_response 만: write 를 테스트 안의 가짜(__wrap_write)로 바꿔 끼워 부분 쓰기·EINTR 를 재현한다
+$(TBIN)/test_response: TEST_LDFLAGS := -Wl,--wrap=write
 
 # 테스트 실행 파일을 하나씩 돌리고, 하나라도 실패하면 make 가 실패한다
 test: $(TESTS)
