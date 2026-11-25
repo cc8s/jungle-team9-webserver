@@ -94,3 +94,9 @@ connection_close는 이벤트 루프만 실행한다: 감시 해제 → close �
 수신 버퍼는 모든 연결의 capacity 합계로 계측한다. 확장 전 증가분을 검사하고 성공 시 반영, 해제 시 차감한다. 업로드 ID는 PID_워커번호_uint64_t로컬순번이며 소진 후 재사용하지 않는다.
 
 확정: 파일 청크는 16 KiB를 유지한다. 큐에 들어간 작업에는 별도 대기 기한을 두지 않으며, 큐가 가득 찬 새 요청은 503 후 close한다. 기존 수신/idle/송신 기한과 구분한다.
+
+## 구현 단계 1: 응답 준비 API와 업로드 ID
+
+http_prepare_response는 기존 경로 검증/GET/POST 분기를 수행하되 소켓에 쓰지 않고 헤더·메모리 본문 또는 파일 FD를 http_prepared_response에 보관한다. http_prepare_file_chunk는 워커가 16 KiB 이하를 읽고, http_prepared_dispose가 최종 파일/본문을 해제한다. 기존 http_respond는 이 준비 API와 기존 송신 API를 조합하는 호환 경로로 남긴다.
+
+upload_id_next는 스레드 로컬 문맥으로 PID_워커번호_uint64_t순번을 발급한다. 풀 워커 외의 호출은 별도 높은 번호 범위에서 스레드 번호를 한 번 할당받는다. 순번 소진은 별도 플래그로 표현하여 UINT64_MAX 뒤 wrap하지 않는다.

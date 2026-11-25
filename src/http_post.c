@@ -1,4 +1,5 @@
 #include "http_post.h"
+#include "upload_id.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -159,15 +160,9 @@ static int store_upload(const unsigned char *bytes, size_t length, const json_va
     int file = -1, meta = -1, error = 500, own_file = 0, own_meta = 0;
     char id[96], bin_name[104] = {0}, meta_name[104] = {0};
     json_output info = {0};
-    static unsigned long sequence;
     for (int attempt = 0; attempt < 1000; attempt++) {
-        struct timespec now;
-        struct tm utc;
-        char stamp[32];
-        if (clock_gettime(CLOCK_REALTIME, &now) < 0 || !gmtime_r(&now.tv_sec, &utc) ||
-            !strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%S", &utc))
+        if (upload_id_next(id, sizeof(id)) < 0)
             goto cleanup;
-        snprintf(id, sizeof(id), "%s.%09ldZ_%lu", stamp, now.tv_nsec, sequence++);
         snprintf(bin_name, sizeof(bin_name), "%s.bin", id);
         snprintf(meta_name, sizeof(meta_name), "%s.json", id);
         file = openat(directory, bin_name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);

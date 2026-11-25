@@ -50,3 +50,7 @@
 
 - 파일 청크 16 KiB 이하, 부분 전송 후 위치 보존, 마지막 청크와 정확한 Content-Length 전송을 검증한다.
 - 작업 장벽으로 큐 대기를 길게 유지해도 별도 큐 timeout으로 제거하지 않는지 확인한다. 큐 포화 새 요청의 503 및 기존 I/O 기한과 구분한다.
+
+## 구현 단계 1 실제 결과
+
+macOS에서 test_upload_id, test_http_response, test_fault_recovery, test_transfer_timing, test_path_bounds를 빌드·실행하여 통과했다. ID 경계값/독립 스레드 문맥과 기존 응답·실패 주입 호환성을 확인했다. 소스 include 방식 테스트는 신규 외부 응답 API의 테스트별 이름을 분리했다. Docker daemon 29.7.2와 Ubuntu 22.04 빌드 이미지 준비도 확인했다. epoll 통합 실행은 후속 단계에서 검증한다.

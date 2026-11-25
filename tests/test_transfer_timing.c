@@ -82,6 +82,10 @@ static ssize_t controlled_send(int fd, const void *data, size_t length, int flag
 #define http_respond timing_respond
 #define http_send_response timing_send_response
 #include "../src/http_request.c"
+#define http_prepare_response included_test_transfer_timing_http_prepare_response
+#define http_prepare_unavailable included_test_transfer_timing_http_prepare_unavailable
+#define http_prepare_file_chunk included_test_transfer_timing_http_prepare_file_chunk
+#define http_prepared_dispose included_test_transfer_timing_http_prepared_dispose
 #include "../src/http_response.c"
 #undef clock_gettime
 #undef poll

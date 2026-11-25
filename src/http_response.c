@@ -33,11 +33,6 @@ int http_send_all(int fd, const void *data, size_t length, int64_t *deadline)
     return 0;
 }
 
-typedef struct {
-    int64_t deadline;
-    int close_connection;
-} response_state;
-
 static const char *reason(int status)
 {
     switch (status) {
@@ -54,6 +49,7 @@ static const char *reason(int status)
     case 414: return "URI Too Long";
     case 431: return "Request Header Fields Too Large";
     case 501: return "Not Implemented";
+    case 503: return "Service Unavailable";
     case 505: return "HTTP Version Not Supported";
     default: return "Internal Server Error";
     }
@@ -75,29 +71,27 @@ static int request_status(http_request_error error)
     }
 }
 
-static int send_headers(int fd, int status, const char *mime, uintmax_t length, const char *allow,
-                        response_state *state)
+static int prepare_headers(http_prepared_response *r, int status, const char *mime,
+                           uintmax_t length, const char *allow)
 {
-    char header[512];
-    int n = snprintf(header, sizeof(header),
-                     "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ju\r\n%s%s%s%s\r\n",
-                     status, reason(status), mime, length,
-                     state->close_connection ? "Connection: close\r\n" : "", allow ? "Allow: " : "",
-                     allow ? allow : "", allow ? "\r\n" : "");
-    if (n < 0 || (size_t)n >= sizeof(header))
-        return -1;
-    return http_send_all(fd, header, (size_t)n, &state->deadline);
+    if (status >= 400) r->close_connection = 1;
+    int n = snprintf(r->header, sizeof(r->header),
+        "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ju\r\n%s%s%s%s\r\n",
+        status, reason(status), mime, length,
+        r->close_connection ? "Connection: close\r\n" : "",
+        allow ? "Allow: " : "", allow ? allow : "", allow ? "\r\n" : "");
+    if (n < 0 || (size_t)n >= sizeof(r->header)) return -1;
+    r->header_length = (size_t)n;
+    return 0;
 }
-
-static int send_error(int fd, int status, response_state *state)
+static int prepare_error(http_prepared_response *r, int status)
 {
-    state->close_connection = 1;
-    char body[128];
-    int n = snprintf(body, sizeof(body), "%d %s\n", status, reason(status));
-    if (send_headers(fd, status, "text/plain; charset=utf-8", (size_t)n, status == 405 ? "GET" : NULL, state)) return -1;
-    return http_send_all(fd, body, (size_t)n, &state->deadline);
+    int n = snprintf(r->fixed_body, sizeof(r->fixed_body), "%d %s\n", status, reason(status));
+    if (n < 0 || (size_t)n >= sizeof(r->fixed_body)) return -1;
+    r->body_length = (size_t)n;
+    return prepare_headers(r, status, "text/plain; charset=utf-8", r->body_length,
+                           status == 405 ? "GET" : NULL);
 }
-
 static int hex(unsigned char c)
 {
     if (c >= '0' && c <= '9') return c - '0';
@@ -144,43 +138,36 @@ static int field_in_buffer(http_field field, size_t length)
     return field.offset <= length && field.length <= length - field.offset;
 }
 
-static int send_json_response(int fd, post_response *response, const char *allow, response_state *state)
+static int prepare_json(http_prepared_response *r, post_response *post, const char *allow)
 {
-    if (response->status >= 400)
-        state->close_connection = 1;
-    int result = send_headers(fd, response->status, "application/json", response->body.length,
-                              allow, state);
-    if (!result)
-        result = http_send_all(fd, response->body.data, response->body.length, &state->deadline);
-    free(response->body.data);
-    return result;
+    r->body = (unsigned char *)post->body.data;
+    r->body_length = post->body.length;
+    return prepare_headers(r, post->status, "application/json", r->body_length, allow);
 }
-
-static int json_error(int fd, int status, const char *allow, response_state *state)
+static int prepare_json_error(http_prepared_response *r, int status, const char *allow)
 {
-    post_response response = {0};
-    if (post_error(&response, status, "request_error", reason(status))) {
-        free(response.body.data);
-        return -1;
+    post_response post = {0};
+    if (post_error(&post, status, "request_error", reason(status))) {
+        free(post.body.data); return -1;
     }
-    return send_json_response(fd, &response, allow, state);
+    return prepare_json(r, &post, allow);
 }
-
 static int is_post(const http_buffer *buffer, const http_request *request)
 {
     return buffer && buffer->data && field_in_buffer(request->method, buffer->length) &&
            request->method.length == 4 && !memcmp(buffer->data + request->method.offset, "POST", 4);
 }
 
-static int respond_once(int fd, const http_buffer *buffer, const http_request *request,
-                        response_state *state)
+int http_prepare_response(const http_buffer *buffer, const http_request *request,
+                          int force_close, http_prepared_response *state)
 {
+    *state = (http_prepared_response){.file = -1, .close_connection = force_close};
     if (!request)
-        return send_error(fd, 500, state);
+        return prepare_error(state, 500);
     int status = request_status(request->error);
     int post = is_post(buffer, request);
     if (status != 200)
-        return post ? json_error(fd, status, NULL, state) : send_error(fd, status, state);
+        return post ? prepare_json_error(state, status, NULL) : prepare_error(state, status);
     /* Error responses above do not require a receive buffer. */
     if (!buffer || !buffer->data || !field_in_buffer(request->method, buffer->length) ||
         !field_in_buffer(request->target, buffer->length) ||
@@ -189,43 +176,65 @@ static int respond_once(int fd, const http_buffer *buffer, const http_request *r
         !field_in_buffer(request->connection, buffer->length) ||
         !field_in_buffer(request->content_type, buffer->length) || !request->method.length ||
         !request->target.length)
-        return post ? json_error(fd, 500, NULL, state) : send_error(fd, 500, state);
+        return post ? prepare_json_error(state, 500, NULL) : prepare_error(state, 500);
     if (request->target.length >= HTTP_LINE_LIMIT)
-        return post ? json_error(fd, 414, NULL, state) : send_error(fd, 414, state);
+        return post ? prepare_json_error(state, 414, NULL) : prepare_error(state, 414);
     char path[HTTP_LINE_LIMIT + 1];
     status = decode_path(buffer->data + request->target.offset, request->target.length, path,
                          sizeof(path));
     if (status)
-        return post ? json_error(fd, status, NULL, state) : send_error(fd, status, state);
+        return post ? prepare_json_error(state, status, NULL) : prepare_error(state, status);
     if (post) {
         if (!request->has_content_length)
-            return json_error(fd, 411, NULL, state);
+            return prepare_json_error(state, 411, NULL);
         if (request->header_length > buffer->length ||
             request->content_length > buffer->length - request->header_length)
-            return json_error(fd, 500, NULL, state);
+            return prepare_json_error(state, 500, NULL);
         post_response response = {0};
         int error = post_prepare(
             path, buffer->data + request->header_length, request->content_length,
             buffer->data + request->content_type.offset, request->content_type.length, &response);
         if (error) {
             free(response.body.data);
-            return json_error(fd, 500, NULL, state);
+            return prepare_json_error(state, 500, NULL);
         }
-        return send_json_response(fd, &response, NULL, state);
+        return prepare_json(state, &response, NULL);
     }
     if (post_is_route(path))
-        return json_error(fd, 405, "POST", state);
+        return prepare_json_error(state, 405, "POST");
     if (request->method.length != 3 || memcmp(buffer->data + request->method.offset, "GET", 3))
-        return send_error(fd, 405, state);
+        return prepare_error(state, 405);
     get_response response = {.file = -1};
     status = get_prepare(path, &response);
     if (status != 200)
-        return send_error(fd, status, state);
-    int result = send_headers(fd, 200, response.mime, response.length, NULL, state);
-    if (!result)
-        result = get_send_body(fd, &response, &state->deadline);
-    close(response.file);
-    return result;
+        return prepare_error(state, status);
+    state->file = response.file;
+    state->file_left = response.length;
+    return prepare_headers(state, 200, response.mime, response.length, NULL);
+}
+
+void http_prepare_unavailable(http_prepared_response *response)
+{
+    *response = (http_prepared_response){.file = -1, .close_connection = 1};
+    (void)prepare_error(response, 503);
+}
+void http_prepared_dispose(http_prepared_response *response)
+{
+    if (response->file >= 0) close(response->file);
+    free(response->body);
+    *response = (http_prepared_response){.file = -1};
+}
+int http_prepare_file_chunk(http_prepared_response *r)
+{
+    r->chunk_length = r->chunk_sent = 0;
+    if (!r->file_left) return 0;
+    size_t count = r->file_left < sizeof(r->chunk) ? (size_t)r->file_left : sizeof(r->chunk);
+    ssize_t n;
+    do { n = read(r->file, r->chunk, count); } while (n < 0 && errno == EINTR);
+    if (n <= 0) return -1;
+    r->chunk_length = (size_t)n;
+    r->file_left -= (size_t)n;
+    return 0;
 }
 
 http_response_result http_respond(int fd, const http_buffer *buffer,
@@ -234,10 +243,20 @@ http_response_result http_respond(int fd, const http_buffer *buffer,
     int64_t now = http_now_ms();
     if (now < 0)
         return (http_response_result){.io_error = -1, .close_connection = 1};
-    response_state state = {.deadline = now + 5000, .close_connection = force_close};
-    int result = respond_once(fd, buffer, request, &state);
-    return (http_response_result){.io_error = result,
-        .close_connection = state.close_connection || result < 0};
+    http_prepared_response response;
+    int result = http_prepare_response(buffer, request, force_close, &response);
+    int64_t deadline = now + 5000;
+    if (!result) result = http_send_all(fd, response.header, response.header_length, &deadline);
+    if (!result && response.file >= 0) {
+        get_response file = {.file = response.file, .length = response.file_left};
+        result = get_send_body(fd, &file, &deadline);
+    } else if (!result) {
+        result = http_send_all(fd, response.body ? response.body : (unsigned char *)response.fixed_body,
+                               response.body_length, &deadline);
+    }
+    int closing = response.close_connection || result < 0;
+    http_prepared_dispose(&response);
+    return (http_response_result){.io_error = result, .close_connection = closing};
 }
 
 /* One-shot compatibility entry point for existing direct response callers. */

@@ -2,6 +2,10 @@
 #define http_send_all bounds_send_all
 #define http_respond bounds_respond
 #define http_send_response bounds_send_response
+#define http_prepare_response included_test_path_bounds_http_prepare_response
+#define http_prepare_unavailable included_test_path_bounds_http_prepare_unavailable
+#define http_prepare_file_chunk included_test_path_bounds_http_prepare_file_chunk
+#define http_prepared_dispose included_test_path_bounds_http_prepared_dispose
 #include "../src/http_response.c"
 #include <assert.h>
 
