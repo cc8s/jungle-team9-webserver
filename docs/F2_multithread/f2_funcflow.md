@@ -110,3 +110,13 @@ thread_pool_submit은 mutex 아래 대기 큐만 변경하고 가득 차면 즉�
 main의 CLI 해석 → event_loop_run → 리스너/완료 eventfd 등록 → epoll_wait → receive_request(recv/http_parse_request) → dispatch → execute_job(응답 준비/첫 파일 읽기) → 완료 큐 → collect_completions → start_sending → send_response(send만) 순서다. 파일 청크를 다 보냈으면 submit_read로 파일 읽기 작업을 제출하고, 포화 시 READ_PENDING으로 감시를 해제해 다음 완료 회수에서 재시도한다. 큐에 들어간 후속 작업도 종료 중 유지된다.
 
 close_connection은 워커 소유 상태를 회수한 뒤에만 호출한다. SIGINT/SIGTERM은 플래그+eventfd로 루프를 깨우고 부분 수신/idle 연결을 닫는다. PREPARING/READING/READ_PENDING/SENDING은 drain한 뒤 풀 join·FD 정리로 종료한다.
+
+## recv 종료·실패 분기 보완
+
+receive_request → recv
+→ EINTR: 재시도 / EAGAIN·EWOULDBLOCK: 루프로 반환
+→ 실제 읽기 오류: close_connection (워커 제출 없음)
+→ EOF + 버퍼 비어 있음/IDLE: close_connection (무응답)
+→ EOF + 부분 요청: HTTP_INCOMPLETE_REQUEST → dispatch → 기존 오류 응답
+
+완성된 요청은 recv를 더 호출하기 전에 파싱 완료로 dispatch하므로, 상대가 SHUT_WR한 정상 요청도 처리한다. 읽기 오류에서 임의 500을 생성하던 경로는 제거한다.

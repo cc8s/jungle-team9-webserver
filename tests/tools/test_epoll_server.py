@@ -98,6 +98,15 @@ def main():
                 s.sendall(b"cd" + post("/api/users", b'{"name":"later"}', True))
                 assert response(s)[0] == 200
                 assert s.recv(1) == b""
+            # Empty EOF is silent; partial EOF still receives 400.
+            with connect() as s:
+                s.shutdown(socket.SHUT_WR)
+                assert s.recv(1) == b""
+            with connect() as s:
+                s.sendall(b"GET / HTTP/1.1\r\nHost:")
+                s.shutdown(socket.SHUT_WR)
+                assert response(s)[0] == 400
+                assert s.recv(1) == b""
             with connect() as s:
                 s.sendall(GET); s.shutdown(socket.SHUT_WR)
                 assert response(s)[0] == 200
@@ -202,6 +211,10 @@ def main():
             assert entered.exists()
             b = connect(); sockets.append(b); b.sendall(GET)
             time.sleep(.1)  # a worker is gated; b occupies the single queue slot.
+            # A full queue must not turn an empty EOF into a 503 job.
+            with connect() as empty:
+                empty.shutdown(socket.SHUT_WR)
+                assert empty.recv(1) == b""
             c = connect(); sockets.append(c); c.sendall(GET)
             status, _, _, header = response(c)
             assert status == 503 and b"Connection: close" in header

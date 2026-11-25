@@ -180,8 +180,14 @@ static void receive_request(event_loop *loop, connection *c)
         if(n<0 && errno==EINTR) continue;
         if(n<0 && (errno==EAGAIN || errno==EWOULDBLOCK)) return;
         if(n<=0) {
-            if(c->state==IDLE) {close_connection(loop,c);return;}
-            c->request.error=n?HTTP_READ_ERROR:HTTP_INCOMPLETE_REQUEST;
+            /* Empty EOF has no HTTP request to answer. Real read errors mean
+               the transport failed; neither case should consume a worker. */
+            if(n<0 || c->state==IDLE || !c->buffer.length) {
+                close_connection(loop,c);return;
+            }
+            /* A partial request followed by a write-half close can still
+               receive the existing incomplete-request error response. */
+            c->request.error=HTTP_INCOMPLETE_REQUEST;
             c->request.connection_close=1;
             dispatch(loop,c);return;
         }

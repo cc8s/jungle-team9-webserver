@@ -87,3 +87,14 @@ Docker Ubuntu22.04/Linux arm64에서 경고 없는 제품 빌드와 tests/tools/
 ASan/LSan/UBSan 실제main 통합도 통과했다. LD_PRELOAD 장벽은 fortified 빌드의 __read_chk까지 가로채며, 검증 시 `F2_TEST_PRELOAD_PREFIX=$(gcc -print-file-name=libasan.so)`로 런타임 순서를 유지했다. 종료 테스트의 중복 SIGTERM 전송을 제거하여 정상 drain 완료를 기다린다. 이 계측 보완은 제품 코드에 포함되지 않는다.
 
 기본 Docker 이미지 자체에서도 서버를 실행해 사전 준비된 uploads_storage에 업로드201 응답과 정상 종료를 확인했다.
+
+## 빈 EOF·실제 읽기 오류의 워커 제출 제거 검증
+
+Docker Linux에서 다음을 실행하여 통과했다.
+
+- `make tests/bin/test_receive_close && ./tests/bin/test_receive_close`: 실제 socketpair 빈 EOF 및 ECONNRESET/EIO 주입은 제출 횟수0·FD/버퍼 정리를 확인. 부분 요청 EOF는 불완전 요청 작업1개, 완성 요청+SHUT_WR은 정상 작업1개를 확인했다.
+- `make tests/bin/test_persistent && ./tests/bin/test_persistent`: 기존 F1 연결 재사용·파이프라인·GET 본문 폐기·기한·100개 제한 회귀 통과.
+- `make test-f2`: 실제 서버에서 빈 EOF 무응답 종료, 부분 요청 EOF 400, 완성 요청 SHUT_WR 정상 응답, 큐 포화 상태의 빈 EOF 무응답 종료를 포함한 통합 테스트 전체 통과.
+- 신규 test_receive_close를 별도 BUILD/TBIN으로 ASan/LSan/UBSan 빌드·실행해 통과했다.
+
+위 결과는 이번 수정의 검증 범위이며, 앞 절의 전체 sanitizer 검증을 이번에 모두 재실행했다는 뜻은 아니다.
