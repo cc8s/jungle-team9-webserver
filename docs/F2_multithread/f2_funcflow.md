@@ -100,3 +100,7 @@ connection_close는 이벤트 루프만 실행한다: 감시 해제 → close �
 http_prepare_response는 기존 경로 검증/GET/POST 분기를 수행하되 소켓에 쓰지 않고 헤더·메모리 본문 또는 파일 FD를 http_prepared_response에 보관한다. http_prepare_file_chunk는 워커가 16 KiB 이하를 읽고, http_prepared_dispose가 최종 파일/본문을 해제한다. 기존 http_respond는 이 준비 API와 기존 송신 API를 조합하는 호환 경로로 남긴다.
 
 upload_id_next는 스레드 로컬 문맥으로 PID_워커번호_uint64_t순번을 발급한다. 풀 워커 외의 호출은 별도 높은 번호 범위에서 스레드 번호를 한 번 할당받는다. 순번 소진은 별도 플래그로 표현하여 UINT64_MAX 뒤 wrap하지 않는다.
+
+## 구현 단계 2: 공통 작업 큐와 완료 큐
+
+thread_pool_submit은 mutex 아래 대기 큐만 변경하고 가득 차면 즉시 반환한다. worker_main은 cond_wait로 잠들고 작업을 꺼낸 뒤 잠금을 해제하여 execute를 수행한다. 완료 작업은 별도 할당 없이 job의 next 포인터로 완료 큐에 연결한 후 알림 콜백을 호출한다. 시작 시 일부 pthread_create 실패도 생성된 워커를 깨워 join한다.
