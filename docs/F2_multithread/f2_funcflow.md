@@ -14,7 +14,7 @@ main → accept → handle_connection
 ## 전환 후 초기화
 
 main
-→ CLI 해석·범위 검증 (기본: 워커4/큐64/연결128/수신32 MiB)
+→ CLI 해석·범위 검증: --worker 4 --queue 64 --max 128 --buffer 32 (MiB)
 → socket / bind / listen / SIGPIPE 무시
 → listener O_NONBLOCK
 → thread_pool_init(N, Q) : mutex·condvar·작업/완료 큐·워커 문맥
@@ -83,9 +83,12 @@ connection_close는 이벤트 루프만 실행한다: 감시 해제 → close �
 
 종료 요청 알림 → listener 해제·수락 중단
 → 큐에 든 작업·실행 중 작업은 응답 준비와 전송까지 계속 진행
-→ 부분 수신/idle/기존 송신 중 연결의 세부 정리·전체 종료 기한은 추가 합의
+→ 부분 수신/idle/미접수 요청 close, 기존 SENDING은 전송 완료 후 close
+→ 전체 종료 기한 없음. 송신 진행 없음 5초 제한 유지
 → 종료 플래그와 cond_broadcast
 → 완료 이벤트를 계속 회수하며 활성 작업 수명 보장
 → 워커 join → 연결/큐/eventfd/epoll/listener 정리
 
 시그널 핸들러에서 mutex·condvar를 직접 조작하지 않는다. 알림 FD를 이용한 안전한 종료 통지 방식을 구현 시 확정한다.
+
+수신 버퍼는 모든 연결의 capacity 합계로 계측한다. 확장 전 증가분을 검사하고 성공 시 반영, 해제 시 차감한다. 업로드 ID는 PID_워커번호_uint64_t로컬순번이며 소진 후 재사용하지 않는다.
