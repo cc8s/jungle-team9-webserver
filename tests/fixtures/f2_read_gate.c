@@ -7,7 +7,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
-ssize_t read(int fd,void *buffer,size_t count)
+static ssize_t gated_read(int fd,void *buffer,size_t count)
 {
     ssize_t (*real_read)(int,void *,size_t)=dlsym(RTLD_NEXT,"read");
     const char *gate=getenv("F2_READ_GATE"), *entered=getenv("F2_GATE_ENTERED");
@@ -24,4 +24,15 @@ ssize_t read(int fd,void *buffer,size_t count)
         }
     }
     return real_read(fd,buffer,count);
+}
+
+ssize_t read(int fd,void *buffer,size_t count)
+{
+    return gated_read(fd,buffer,count);
+}
+/* Fortified/ASan builds can call __read_chk instead of read at this boundary. */
+ssize_t __read_chk(int fd,void *buffer,size_t count,size_t buffer_size)
+{
+    if(count>buffer_size) abort();
+    return gated_read(fd,buffer,count);
 }

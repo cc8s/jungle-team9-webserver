@@ -21,7 +21,9 @@
 #define WAKE_TOKEN (UINT64_MAX-1)
 #define IO_BUDGET 65536
 #define ACCEPT_BUDGET 32
-/* JOB states are owned by a worker until completion retrieval. */
+/* One loop owns all sockets, receive buffers and epoll registrations.
+   JOB states lend only response preparation/file reads to a worker. Completion
+   queue publication transfers those fields back before the loop reads them. */
 typedef enum { FREE, HEADERS, BODY, IDLE, DISCARD, PREPARING, READING, READ_PENDING, SENDING } connection_state;
 typedef struct connection {
     pool_job job;
@@ -298,12 +300,26 @@ static void collect_completions(event_loop *loop)
     for(size_t i=0;i<loop->config.max_connections;i++)
         if(loop->connections[i].state==READ_PENDING) submit_read(loop,&loop->connections[i]);
 }
+/* Linux may report a pending peer/network error from accept4. It affects that
+   connection, not the listening socket. Retry within the normal fairness budget. */
+static int transient_accept_error(int error)
+{
+    switch(error) {
+    case ECONNABORTED: case EPROTO: case ENETDOWN: case ENOPROTOOPT:
+    case EHOSTDOWN: case ENONET: case EHOSTUNREACH: case EOPNOTSUPP: case ENETUNREACH:
+        return 1;
+    default: return 0;
+    }
+}
 static int accept_connections(event_loop *loop)
 {
     for(int budget=ACCEPT_BUDGET;budget && loop->active<loop->config.max_connections;budget--) {
         int fd=accept4(loop->listener,NULL,NULL,SOCK_NONBLOCK|SOCK_CLOEXEC);
-        if(fd<0 && errno==EINTR) {budget++;continue;}
+        if(fd<0 && errno==EINTR) continue;
         if(fd<0 && (errno==EAGAIN || errno==EWOULDBLOCK)) return 0;
+        if(fd<0 && transient_accept_error(errno)) continue;
+        /* Descriptor exhaustion and broken listener errors fail explicitly rather
+           than spin on a permanently readable listener. */
         if(fd<0) return -1;
         int64_t now=http_now_ms();
         if(now<0) {close(fd);return -1;}

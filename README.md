@@ -8,14 +8,14 @@
 
 | 영역 | 내용 | 상태 |
 |---|---|---|
-| TCP 소켓 서버 | `socket → bind → listen → accept` | ⬜ |
-| HTTP 요청 파싱 | 요청 라인, 헤더, 본문 (GET / POST) | ⬜ |
-| HTTP 응답 생성 | 상태 라인, 표준 헤더, 본문 | ⬜ |
-| 정적 파일 서빙 | 루트 디렉토리, MIME 매핑, 404 / 403 / 500 | ⬜ |
-| 동적 요청 처리 | | ⬜ |
-| 동시 요청 처리 | | ⬜ |
+| TCP 소켓 서버 | `socket → bind → listen → accept` | ✅ |
+| HTTP 요청 파싱 | 요청 라인, 헤더, 본문 (GET / POST) | ✅ |
+| HTTP 응답 생성 | 상태 라인, 표준 헤더, 본문 | ✅ |
+| 정적 파일 서빙 | 루트 디렉토리, MIME 매핑, 404 / 403 / 500 | ✅ |
+| 동적 요청 처리 | POST JSON·폼·Base64 업로드 | ✅ |
+| 동시 요청 처리 | epoll + pthread 워커 풀 | ✅ |
 | Proxy / Reverse Proxy | | ⬜ |
-| 종료 처리 | SIGINT / SIGTERM, SIGPIPE 무시 | ⬜ |
+| 종료 처리 | SIGINT / SIGTERM, SIGPIPE 무시 | ✅ |
 
 ## 빌드 · 실행
 

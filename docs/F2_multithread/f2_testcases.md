@@ -1,6 +1,8 @@
 # F2. epoll + pthread 검증 계획
 
-## 이번 계획 작업의 실제 확인
+## 초기 계획 시점 확인 (과거 이력)
+
+아래는 구현 전 조사 기록이다. 현재 구현·실행 결과는 하단 구현 단계별 실제 결과와 최종 검증 결과를 따른다.
 
 - main은 handle_connection을 직접 호출하고, 해당 함수는 수신/응답/다음 요청을 반복한다.
 - http_receive_request 내부의 poll 대기는 이벤트 루프에서 재사용할 수 없다. http_parse_request는 대기 없는 파서다.
@@ -10,7 +12,7 @@
 - uname -s 결과 Darwin. Linux epoll 실행 테스트는 이번 작업에서 하지 않았다.
 - 제품 코드·실행 결과는 변경하지 않았다. git diff --check로 문서 공백 오류를 검사한다.
 
-## 단계별 실행 예정
+## 초기 검증 계획 (실행 여부는 하단 결과 참조)
 
 | 단계/상황 | 기대 결과 | 방법 |
 |---|---|---|
@@ -70,3 +72,18 @@ Docker Ubuntu22.04/Linux arm64에서 경고 없는 제품 빌드와 tests/tools/
 기존 회귀 실행 결과: Docker Linux에서 `make test` 전체 통과. root 컨테이너에서 생략되는 권한 거부 사례는 별도 UID1000 컨테이너에서 test_http_response/test_post를 실행해 통과했다. 기존 test_post의 파일명 snprintf 길이 경고는 테스트 코드의 기존 경고이며 제품 빌드 경고는 없었다.
 
 부모 에이전트의 독립 실제main 검증: 워커1개와16 MiB 파일, 수신버퍼1024의 읽지 않는 상대를 둔 동안 다른 GET이2초 이내 완료했고, 6초 후 SIGTERM에서3초 이내 정상 종료했다. 기능 확인의 시간 상한이며 처리량 벤치마크가 아니다.
+
+## 최종 검증과 제한
+
+- Docker Linux arm64의 `make asan` 전체 통과: 기존 HTTP 회귀와 풀/ID 테스트를 ASan/LSan/UBSan으로 실행했다.
+- `test_accept_recovery`는 accept4의 ECONNABORTED/EPROTO 및 Linux pending network errors를 주입하여 해당 연결 오류로 서버가 종료되지 않고 예산 내 재시도하는 것을 확인했다. EMFILE은 명시적 서버 오류 종료이며 무한 재시도하지 않는다.
+- `test_pool_failure`는 세 allocation 실패와 두 번째 pthread_create 실패를 주입하여 부분 생성 워커 join·자원 정리를 확인했다. 두 실패 주입 테스트는 ASan/LSan/UBSan 빌드에서도 통과했다.
+- ThreadSanitizer는 Docker 기본 seccomp에서 personality 호출 금지로 런타임 초기화가 실패했다. `--security-opt seccomp=unconfined`인 검증용 컨테이너에서 test_thread_pool/test_upload_id와 실제 main 통합 테스트 전체를 재실행하여 통과했다. 이 옵션은 일반 서버 실행에는 필요하지 않다.
+- 성능 벤치마크/장시간 부하 테스트, generation 2^32회 소진 실험, 실제 호스트 FD 전체 고갈 실험은 실행하지 않았다. 정상 종료는 전체 기한이 없고 진행 중 작업이 끝날 때까지 기다릴 수 있다.
+- Docker 이미지는 빌드 시 uploads_storage를 미리 준비한다. 서버 실행 코드가 디렉토리를 자동 생성하지 않는 기존 계약은 유지한다.
+
+추가 실제main 검증: 한 번에100개 파이프라인 요청을 보내100번째 Connection: close와 EOF를 확인했다. 다른 연결의 준비 이벤트가 계속 발생하는 동안에도 헤더5초/POST 본문10초/idle5초 만료가 처리되어 각각408/408/무응답 종료되는 것을 확인했다.
+
+ASan/LSan/UBSan 실제main 통합도 통과했다. LD_PRELOAD 장벽은 fortified 빌드의 __read_chk까지 가로채며, 검증 시 `F2_TEST_PRELOAD_PREFIX=$(gcc -print-file-name=libasan.so)`로 런타임 순서를 유지했다. 종료 테스트의 중복 SIGTERM 전송을 제거하여 정상 drain 완료를 기다린다. 이 계측 보완은 제품 코드에 포함되지 않는다.
+
+기본 Docker 이미지 자체에서도 서버를 실행해 사전 준비된 uploads_storage에 업로드201 응답과 정상 종료를 확인했다.

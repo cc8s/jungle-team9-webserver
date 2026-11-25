@@ -40,6 +40,7 @@ def response(s, carry=b""):
 
 class Server:
     def __init__(self, directory, args=(), env=None):
+        self.stop_sent = False
         self.process = subprocess.Popen([str(BINARY), *args], cwd=directory,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
         ready, _, _ = select.select([self.process.stderr], [], [], 10)
@@ -47,9 +48,13 @@ class Server:
         line = self.process.stderr.readline()
         assert b"listening" in line, line
 
-    def stop(self):
-        if self.process.poll() is None:
+    def request_stop(self):
+        if self.process.poll() is None and not self.stop_sent:
+            self.stop_sent = True
             self.process.send_signal(signal.SIGTERM)
+
+    def stop(self):
+        self.request_stop()
         try:
             assert self.process.wait(timeout=15) == 0, self.process.stderr.read()
         finally:
@@ -96,6 +101,16 @@ def main():
             with connect() as s:
                 s.sendall(GET); s.shutdown(socket.SHUT_WR)
                 assert response(s)[0] == 200
+            # The 100th response closes, even with all requests already buffered.
+            with connect() as s:
+                s.sendall(GET * 100)
+                carry = b""
+                for index in range(100):
+                    status, _, carry, header = response(s, carry)
+                    assert status == 200
+                    if index == 99:
+                        assert b"Connection: close" in header
+                assert not carry and s.recv(1) == b""
             # Parallel uploads use distinct IDs and preserve bytes/metadata.
             def upload(_):
                 body = b'{"filename":"x.bin","content_type":"application/octet-stream","encoding":"base64","data":"AAEC"}'
@@ -109,6 +124,27 @@ def main():
             assert len(set(ids)) == len(ids)
             for identifier in ids:
                 assert (work / f"uploads_storage/{identifier}.bin").read_bytes() == b"\x00\x01\x02"
+            # Real epoll deadlines fire despite unrelated ready events.
+            slow.close()
+            header_wait, body_wait, idle_wait = connect(), connect(), connect()
+            header_wait.sendall(b"GET / HTTP/1.1\r\nHost:")
+            body_wait.sendall(b"POST /api/users HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{")
+            idle_wait.sendall(GET); assert response(idle_wait)[0] == 200
+            for timed in (header_wait, body_wait, idle_wait): timed.settimeout(15)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                header_result = executor.submit(response, header_wait)
+                body_result = executor.submit(response, body_wait)
+                idle_result = executor.submit(idle_wait.recv, 1)
+                until = time.monotonic() + 6
+                while time.monotonic() < until:
+                    with connect() as active:
+                        active.sendall(GET)
+                        assert response(active)[0] == 200
+                    time.sleep(.01)
+                assert header_result.result()[0] == 408
+                assert body_result.result()[0] == 408
+                assert idle_result.result() == b""
+            for timed in (header_wait, body_wait, idle_wait): timed.close()
             for s in idle: s.close()
             slow.close()
         finally:
@@ -153,7 +189,9 @@ def main():
                         "-ldl", "-o", str(library)], check=True)
         gate, entered = work / "gate", work / "entered"
         gate.touch()
-        env = dict(os.environ, LD_PRELOAD=str(library), F2_READ_GATE=str(gate), F2_GATE_ENTERED=str(entered))
+        preload = os.environ.get("F2_TEST_PRELOAD_PREFIX", "")
+        env = dict(os.environ, LD_PRELOAD=(preload + ":" if preload else "") + str(library),
+                   F2_READ_GATE=str(gate), F2_GATE_ENTERED=str(entered))
         server = Server(work, ["--worker", "1", "--queue", "1"], env)
         sockets = []
         try:
@@ -168,7 +206,7 @@ def main():
             status, _, _, header = response(c)
             assert status == 503 and b"Connection: close" in header
             assert c.recv(1) == b""
-            server.process.send_signal(signal.SIGTERM)
+            server.request_stop()
             gate.unlink()
             assert response(a)[:2] == (200, file_data)
             assert response(b)[0] == 200
@@ -182,7 +220,7 @@ def main():
         for args in (["--worker", "0"], ["--queue", "-1"], ["--max", "65537"],
                      ["--buffer", "18446744073709551615"], ["--unknown", "1"]):
             assert subprocess.run([str(BINARY), *args], stderr=subprocess.DEVNULL).returncode != 0
-        print("epoll main: concurrency/pipeline/GET discard/half-close/upload/capacity/accept cap/503/drain/CLI passed")
+        print("epoll main: concurrency/pipeline/GET discard/half-close/100 requests/deadlines/upload/capacity/accept cap/503/drain/CLI passed")
 
 
 if __name__ == "__main__":

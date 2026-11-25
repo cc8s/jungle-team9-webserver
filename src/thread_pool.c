@@ -2,6 +2,7 @@
 #include "upload_id.h"
 #include <stdlib.h>
 #include <stdint.h>
+#include <errno.h>
 typedef struct { thread_pool *pool; uint64_t number; } worker_context;
 static void *worker_main(void *argument)
 {
@@ -35,24 +36,28 @@ int thread_pool_init(thread_pool *pool, size_t workers, size_t capacity,
 {
     *pool = (thread_pool){.capacity=capacity, .workers=workers,
                           .notify=notify, .notify_context=context};
-    if (!workers || !capacity) return -1;
-    if (pthread_mutex_init(&pool->mutex, NULL)) return -1;
-    if (pthread_cond_init(&pool->available, NULL)) {
-        pthread_mutex_destroy(&pool->mutex); return -1;
+    if (!workers || !capacity) {errno=EINVAL;return -1;}
+    int error=pthread_mutex_init(&pool->mutex, NULL);
+    if (error) {errno=error;return -1;}
+    error=pthread_cond_init(&pool->available, NULL);
+    if (error) {
+        pthread_mutex_destroy(&pool->mutex);errno=error;return -1;
     }
     pool->threads = calloc(workers, sizeof(*pool->threads));
     pool->contexts = calloc(workers, sizeof(worker_context));
     pool->queue = calloc(capacity, sizeof(*pool->queue));
-    if (!pool->threads || !pool->contexts || !pool->queue) goto fail;
+    if (!pool->threads || !pool->contexts || !pool->queue) {error=ENOMEM;goto fail;}
     worker_context *contexts = pool->contexts;
     for (size_t i=0; i<workers; i++) {
         contexts[i] = (worker_context){pool, i+1};
-        if (pthread_create(&pool->threads[i], NULL, worker_main, &contexts[i])) goto fail;
+        error=pthread_create(&pool->threads[i], NULL, worker_main, &contexts[i]);
+        if (error) goto fail;
         pool->started++;
     }
     return 0;
 fail:
     thread_pool_destroy(pool);
+    errno=error;
     return -1;
 }
 int thread_pool_submit(thread_pool *pool, pool_job *job)

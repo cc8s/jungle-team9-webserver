@@ -1,8 +1,8 @@
 # F2. epoll + pthread 함수 흐름 계획
 
-아래 신규 함수·상태·파일명은 제안이며 미구현이다. 이전 연결 전체를 워커에 맡기는 초안을 대체한다.
+상단은 구현 전의 책임 분할 계획이다. 실제 함수명과 구현 완료 흐름은 아래 구현 단계1~3을 따른다. 이전 연결 전체를 워커에 맡기는 초안은 폐기했다.
 
-## 현재
+## F2 이전 흐름
 
 main → accept → handle_connection
 → http_receive_request → wait_for_data → poll / recv / http_parse_request
