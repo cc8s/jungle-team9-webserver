@@ -53,10 +53,10 @@ L4 → L7 2단 구성 (선택, `-L`): L4 중계는 HTTP 를 읽지 않고 TCP �
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/test-prefork-vs-epoll-dark.png">
-  <img src="docs/test-prefork-vs-epoll.png" alt="prefork+blocking 대 prefork+epoll 여섯 항목 막대 비교. 동시 4명 1.9k 대 4.2k, 동시 1000명 9.3k 대 24.0k, keep-alive 100명 8.8k 대 19.1k req/s 로 epoll 이 높고, Connection: close 100명은 7.5k 대 5.1k 로 epoll 이 낮다. 느린 백엔드 200명은 3.5 대 158 req/s, kill -9 때 끊긴 연결은 1개 대 49개" width="100%">
+  <img src="docs/test-prefork-vs-epoll.png" alt="prefork+blocking 대 prefork+epoll 막대 비교. 동시 4명 1.9k 대 4.2k, 동시 1000명 9.3k 대 24.0k, keep-alive 100명 8.8k 대 19.1k req/s 로 세 경우 모두 epoll 이 높다" width="100%">
 </picture>
 
-환경: Windows 11 + WSL2 Ubuntu (코어 22개), 서버와 `wrk` 가 같은 PC, 작은 파일. 이 PC 는 시간에 따라 속도가 4~10배 흔들려서 한 실행 안에서 번갈아 3번씩 잰 쌍끼리만 비교했습니다 (막대는 3회 범위의 가운데). 숫자는 크기와 방향만 보세요.
+환경: Windows 11 + WSL2 Ubuntu (코어 22개), 서버와 `wrk` 가 같은 PC, 작은 파일. 한 실행 안에서 번갈아 3번씩 잰 쌍끼리 비교했습니다 (막대는 3회 범위의 가운데). 숫자는 크기와 방향만 보세요.
 
 - epoll 이 이기는 곳은 "연결이 오래 살거나 많은데 대부분 쉬는" 경우 입니다: keep-alive 재사용, 느린 백엔드를 기다리는 동안 다른 손님 처리(약 45배).
 - 짧은 연결(`Connection: close`)에서는 epoll 이 오히려 느립니다. 연결마다 syscall 이 더 들기 때문입니다.
